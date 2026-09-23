@@ -9,6 +9,7 @@ token.pickle
 *.session-journal
 
 # Runtime data
+data/
 downloads/
 upload_log.csv
 *.log
