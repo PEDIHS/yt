@@ -1,0 +1,20 @@
+services:
+  panel:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: gunicorn --workers=1 --threads=8 --bind=0.0.0.0:8080 --timeout=120 panel:app
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./client_secret.json:/app/client_secret.json:ro
+
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: python main.py
+    volumes:
+      - ./data:/app/data
+      - ./client_secret.json:/app/client_secret.json:ro
