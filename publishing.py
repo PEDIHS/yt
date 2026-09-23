@@ -12,8 +12,6 @@ from analytics import get_or_sync_channel_analytics
 from config import Config
 from db import SessionLocal, init_db
 from jobs import enqueue_job, process_job
-from integrations import resolve_telegram_token
-import httpx
 from models import ChannelPublishingConfig, UploadJob, UploadSchedule, YouTubeChannel
 from youtube import list_channel_videos
 
@@ -580,34 +578,6 @@ def _mark_due_for_release(limit: int = 8) -> list[int]:
         return ids
 
 
-def _notify_telegram_result(job_id: int, result: dict) -> None:
-    with SessionLocal() as db:
-        job = db.get(UploadJob, job_id)
-        if not job or not job.telegram_user_id:
-            return
-        chat_id = job.telegram_user_id
-        title = job.title
-    token = resolve_telegram_token()
-    if not token:
-        return
-    if result.get("success"):
-        text = (
-            f"✅ انتشار زمان‌بندی‌شده کامل شد.\n"
-            f"🎬 {title}\n"
-            f"🔗 {result.get('video_url') or ''}"
-        )
-    else:
-        text = f"❌ انتشار زمان‌بندی‌شده Job #{job_id} ناموفق بود:\n{result.get('error') or 'Unknown error'}"
-    try:
-        httpx.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
-            timeout=10,
-        )
-    except Exception:
-        logger.exception("Telegram scheduled-job notification failed for job %s", job_id)
-
-
 def _process_scheduled_job(job_id: int) -> None:
     result = process_job(job_id)
     with SessionLocal() as db:
@@ -616,7 +586,7 @@ def _process_scheduled_job(job_id: int) -> None:
             row.status = "released" if result.get("success") else "failed"
             row.released_at = _utcnow()
             db.commit()
-    _notify_telegram_result(job_id, result)
+
 
 
 def _analyze_peak_background(channel_id: int) -> None:
