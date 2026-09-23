@@ -12,6 +12,8 @@ from analytics import get_or_sync_channel_analytics
 from config import Config
 from db import SessionLocal, init_db
 from jobs import enqueue_job, process_job
+from integrations import resolve_telegram_token
+import httpx
 from models import ChannelPublishingConfig, UploadJob, UploadSchedule, YouTubeChannel
 from youtube import list_channel_videos
 
@@ -292,7 +294,7 @@ def _slot_hours(cfg: ChannelPublishingConfig) -> list[dict]:
 def _existing_local_slots(db, channel_id: int, tz: ZoneInfo, local_date) -> list[datetime]:
     schedules = db.query(UploadSchedule).filter(
         UploadSchedule.channel_id == channel_id,
-        UploadSchedule.status.in_(["waiting", "releasing"]),
+        UploadSchedule.status.in_(["waiting", "releasing", "released"]),
     ).all()
     values = []
     for row in schedules:
@@ -321,8 +323,19 @@ def next_smart_slot(channel_id: int, *, after_utc: datetime | None = None) -> tu
         slot_rows = _slot_hours(cfg)
         if not slot_rows:
             slot_rows = [{"hour": 18, "score": 0.0, "samples": 0}]
-        best_for_day = sorted(slot_rows, key=lambda row: row["score"], reverse=True)[:max(1, cfg.videos_per_day)]
-        best_for_day = sorted(best_for_day, key=lambda row: row["hour"])
+        ranked = sorted(slot_rows, key=lambda row: row["score"], reverse=True)
+        desired = max(1, cfg.videos_per_day)
+        selected = ranked[:desired]
+        existing_hours = {int(row["hour"]) for row in selected}
+        step_hours = max(1, math.ceil(cfg.minimum_gap_minutes / 60))
+        for hour in range(cfg.allowed_start_hour, cfg.allowed_end_hour + 1, step_hours):
+            if len(selected) >= desired:
+                break
+            if hour in existing_hours:
+                continue
+            selected.append({"hour": hour, "score": 0.0, "samples": 0})
+            existing_hours.add(hour)
+        best_for_day = sorted(selected, key=lambda row: row["hour"])
 
         local_now = after_aware.astimezone(tz)
         for offset in range(0, 21):
@@ -534,6 +547,34 @@ def _mark_due_for_release(limit: int = 8) -> list[int]:
         return ids
 
 
+def _notify_telegram_result(job_id: int, result: dict) -> None:
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        if not job or not job.telegram_user_id:
+            return
+        chat_id = job.telegram_user_id
+        title = job.title
+    token = resolve_telegram_token()
+    if not token:
+        return
+    if result.get("success"):
+        text = (
+            f"✅ انتشار زمان‌بندی‌شده کامل شد.\n"
+            f"🎬 {title}\n"
+            f"🔗 {result.get('video_url') or ''}"
+        )
+    else:
+        text = f"❌ انتشار زمان‌بندی‌شده Job #{job_id} ناموفق بود:\n{result.get('error') or 'Unknown error'}"
+    try:
+        httpx.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
+            timeout=10,
+        )
+    except Exception:
+        logger.exception("Telegram scheduled-job notification failed for job %s", job_id)
+
+
 def _process_scheduled_job(job_id: int) -> None:
     result = process_job(job_id)
     with SessionLocal() as db:
@@ -542,6 +583,7 @@ def _process_scheduled_job(job_id: int) -> None:
             row.status = "released" if result.get("success") else "failed"
             row.released_at = _utcnow()
             db.commit()
+    _notify_telegram_result(job_id, result)
 
 
 def run_scheduler() -> None:
