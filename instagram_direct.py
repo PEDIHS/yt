@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -238,6 +239,66 @@ def _channel_buttons(share_id: int) -> list[list[dict]]:
         return rows
 
 
+def send_instagram_received_ack(thread_id: str, text: str = "دریافت شد") -> None:
+    thread_id = str(thread_id or "").strip()
+    if not thread_id:
+        raise ValueError("Instagram thread id is missing")
+
+    cookies = _cookies()
+    if not cookies.get("sessionid"):
+        raise RuntimeError("Instagram session is not configured")
+
+    mutation = str(uuid.uuid4())
+    account_seed = (cookies.get("ds_user_id") or "yt-studio").encode("utf-8")
+    import hashlib
+    device_id = "android-" + hashlib.md5(account_seed).hexdigest()[:16]
+    form = {
+        "action": "send_item",
+        "thread_ids": json.dumps([thread_id]),
+        "client_context": mutation,
+        "mutation_token": mutation,
+        "offline_threading_id": mutation.replace("-", ""),
+        "_csrftoken": cookies.get("csrftoken", ""),
+        "_uuid": str(uuid.uuid4()),
+        "device_id": device_id,
+        "text": text,
+    }
+    headers = _headers(cookies)
+    last_error = ""
+    for url in (
+        "https://www.instagram.com/api/v1/direct_v2/threads/broadcast/text/",
+        "https://i.instagram.com/api/v1/direct_v2/threads/broadcast/text/",
+    ):
+        try:
+            response = httpx.post(
+                url,
+                data=form,
+                headers=headers,
+                cookies=cookies,
+                follow_redirects=False,
+                timeout=15,
+            )
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            continue
+
+        if response.status_code == 200:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            if payload.get("status") in {None, "ok"}:
+                return
+            last_error = str(payload.get("message") or payload.get("status") or "Instagram rejected message")
+            continue
+        if response.status_code in {401, 403}:
+            last_error = f"HTTP {response.status_code}"
+            continue
+        last_error = f"HTTP {response.status_code}"
+
+    raise RuntimeError(f"Instagram Direct acknowledgement failed: {last_error or 'unknown error'}")
+
+
 def notify_pending_share(share_id: int) -> None:
     token = resolve_telegram_token()
     admin_id = _primary_admin_id()
@@ -331,6 +392,14 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
 
     if notify:
         for share_id in created_ids:
+            with SessionLocal() as db:
+                share = db.get(InstagramDirectShare, share_id)
+                thread_id = share.thread_id if share else ""
+            if thread_id:
+                try:
+                    send_instagram_received_ack(thread_id)
+                except Exception as exc:
+                    logger.warning("Instagram Direct acknowledgement failed for share %s: %s", share_id, exc)
             try:
                 notify_pending_share(share_id)
             except Exception:
