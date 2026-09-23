@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -10,6 +11,7 @@ from config import Config
 from db import SessionLocal, init_db
 from downloader import is_supported_instagram_url
 from jobs import create_job, process_job
+from integrations import claim_telegram_admin, is_telegram_admin, resolve_telegram_token
 from models import OAuthRequest, TelegramPreference, UploadJob, YouTubeChannel
 from security import new_token
 from youtube import refresh_channel
@@ -19,7 +21,7 @@ logger = logging.getLogger("telegram-bot")
 
 
 def _authorized(user_id: int) -> bool:
-    return user_id in Config.TELEGRAM_ADMIN_IDS
+    return is_telegram_admin(user_id)
 
 
 async def _guard(update: Update) -> bool:
@@ -80,6 +82,23 @@ def _channel_keyboard(active_only: bool = True) -> InlineKeyboardMarkup:
     if not rows:
         rows = [[InlineKeyboardButton("➕ اتصال کانال جدید", callback_data="connect")]]
     return InlineKeyboardMarkup(rows)
+
+
+
+async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user or not update.effective_message:
+        return
+    if _authorized(update.effective_user.id):
+        await update.effective_message.reply_text("✅ شما از قبل مدیر این ربات هستید.")
+        return
+    if not context.args:
+        await update.effective_message.reply_text("کد یک‌بارمصرف پنل را به شکل /claim CODE ارسال کن.")
+        return
+    code = context.args[0].strip()
+    if claim_telegram_admin(update.effective_user.id, code):
+        await update.effective_message.reply_text("✅ دسترسی مدیریت فعال شد. حالا /start را بزن.")
+    else:
+        await update.effective_message.reply_text("❌ کد نامعتبر یا منقضی است.")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -379,9 +398,15 @@ async def error_handler(_update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 def run_bot() -> None:
-    Config.validate_bot()
     init_db()
-    app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
+    token = resolve_telegram_token()
+    while not token:
+        logger.warning("Telegram bot token is not configured yet; waiting for panel setup")
+        time.sleep(10)
+        token = resolve_telegram_token()
+
+    app = Application.builder().token(token).build()
+    app.add_handler(CommandHandler("claim", claim_command))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("channels", channels_command))
