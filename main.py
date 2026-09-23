@@ -757,6 +757,309 @@ async def addplaylist_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.effective_message.reply_text(f"❌ {exc}")
 
 
+
+async def timezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    if len(context.args) < 2:
+        await update.effective_message.reply_text("استفاده: /timezone CHANNEL_ID Asia/Tehran")
+        return
+    channel = _resolve_channel_for_command(update.effective_user.id, context.args[0])
+    if not channel:
+        await update.effective_message.reply_text("کانال پیدا نشد.")
+        return
+    cfg = publishing_config_payload(channel.id)
+    try:
+        updated = update_publishing_config(
+            channel.id,
+            enabled=cfg.get("enabled", False),
+            smart_peak_enabled=cfg.get("smart_peak_enabled", True),
+            videos_per_day=cfg.get("videos_per_day", 2),
+            timezone_name=context.args[1],
+            minimum_gap_minutes=cfg.get("minimum_gap_minutes", 180),
+            allowed_start_hour=cfg.get("allowed_start_hour", 9),
+            allowed_end_hour=cfg.get("allowed_end_hour", 23),
+            manual_slots=cfg.get("manual_slots", []),
+        )
+        await update.effective_message.reply_text(f"✅ Timezone → {updated['timezone']}")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def gap_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    if len(context.args) < 2:
+        await update.effective_message.reply_text("استفاده: /gap CHANNEL_ID MINUTES")
+        return
+    channel = _resolve_channel_for_command(update.effective_user.id, context.args[0])
+    try:
+        minutes = int(context.args[1])
+    except ValueError:
+        minutes = 0
+    if not channel or not minutes:
+        await update.effective_message.reply_text("کانال یا فاصله نامعتبر است.")
+        return
+    cfg = publishing_config_payload(channel.id)
+    try:
+        update_publishing_config(
+            channel.id,
+            enabled=cfg.get("enabled", False),
+            smart_peak_enabled=cfg.get("smart_peak_enabled", True),
+            videos_per_day=cfg.get("videos_per_day", 2),
+            timezone_name=cfg.get("timezone", "Asia/Tehran"),
+            minimum_gap_minutes=minutes,
+            allowed_start_hour=cfg.get("allowed_start_hour", 9),
+            allowed_end_hour=cfg.get("allowed_end_hour", 23),
+            manual_slots=cfg.get("manual_slots", []),
+        )
+        await update.effective_message.reply_text(f"✅ حداقل فاصله انتشار → {minutes} دقیقه")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def slots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    if len(context.args) < 2:
+        await update.effective_message.reply_text("استفاده: /slots CHANNEL_ID 12,18,21")
+        return
+    channel = _resolve_channel_for_command(update.effective_user.id, context.args[0])
+    if not channel:
+        await update.effective_message.reply_text("کانال پیدا نشد.")
+        return
+    try:
+        slots = [int(x.strip()) for x in " ".join(context.args[1:]).replace(";", ",").split(",") if x.strip()]
+        cfg = publishing_config_payload(channel.id)
+        update_publishing_config(
+            channel.id,
+            enabled=cfg.get("enabled", False),
+            smart_peak_enabled=False,
+            videos_per_day=cfg.get("videos_per_day", 2),
+            timezone_name=cfg.get("timezone", "Asia/Tehran"),
+            minimum_gap_minutes=cfg.get("minimum_gap_minutes", 180),
+            allowed_start_hour=cfg.get("allowed_start_hour", 9),
+            allowed_end_hour=cfg.get("allowed_end_hour", 23),
+            manual_slots=slots,
+        )
+        await update.effective_message.reply_text("✅ Slotهای دستی ذخیره شد: " + "، ".join(f"{x:02d}:00" for x in slots))
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def schedulejob_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    if len(context.args) < 2 or not context.args[0].isdigit():
+        await update.effective_message.reply_text("استفاده: /schedulejob JOB_ID 2026-09-25T18:30")
+        return
+    job_id = int(context.args[0])
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        if not job:
+            await update.effective_message.reply_text("Job پیدا نشد.")
+            return
+        channel_id = job.channel_id
+    try:
+        scheduled_utc = local_datetime_to_utc(channel_id, context.args[1])
+        row = schedule_job_manual(job_id, scheduled_utc)
+        local = utc_to_channel_local(channel_id, row.scheduled_for)
+        await update.effective_message.reply_text(f"✅ Job #{job_id} → {local:%Y-%m-%d %H:%M}")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def videokids_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    channel = _selected_channel(update.effective_user.id)
+    if not channel or len(context.args) < 2 or context.args[1].lower() not in {"on", "off"}:
+        await update.effective_message.reply_text("استفاده: /videokids VIDEO_ID on|off")
+        return
+    video_id = context.args[0]
+    try:
+        video = await asyncio.to_thread(get_video_manager_data, channel.id, video_id)
+        await asyncio.to_thread(
+            update_video_metadata,
+            channel.id,
+            video_id,
+            title=video["title"],
+            description=video["description"],
+            tags=video["tags"],
+            privacy=video["privacy"],
+            category_id=video["category_id"],
+            made_for_kids=context.args[1].lower() == "on",
+            embeddable=video["embeddable"],
+        )
+        await update.effective_message.reply_text("✅ Made for Kids بروزرسانی شد.")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def videoembed_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    channel = _selected_channel(update.effective_user.id)
+    if not channel or len(context.args) < 2 or context.args[1].lower() not in {"on", "off"}:
+        await update.effective_message.reply_text("استفاده: /videoembed VIDEO_ID on|off")
+        return
+    video_id = context.args[0]
+    try:
+        video = await asyncio.to_thread(get_video_manager_data, channel.id, video_id)
+        await asyncio.to_thread(
+            update_video_metadata,
+            channel.id,
+            video_id,
+            title=video["title"],
+            description=video["description"],
+            tags=video["tags"],
+            privacy=video["privacy"],
+            category_id=video["category_id"],
+            made_for_kids=video["made_for_kids"],
+            embeddable=context.args[1].lower() == "on",
+        )
+        await update.effective_message.reply_text("✅ Embed ویدیو بروزرسانی شد.")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def videocategory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    channel = _selected_channel(update.effective_user.id)
+    if not channel or len(context.args) < 2 or not context.args[1].isdigit():
+        await update.effective_message.reply_text("استفاده: /videocategory VIDEO_ID CATEGORY_ID")
+        return
+    video_id = context.args[0]
+    try:
+        video = await asyncio.to_thread(get_video_manager_data, channel.id, video_id)
+        await asyncio.to_thread(
+            update_video_metadata,
+            channel.id,
+            video_id,
+            title=video["title"],
+            description=video["description"],
+            tags=video["tags"],
+            privacy=video["privacy"],
+            category_id=context.args[1],
+            made_for_kids=video["made_for_kids"],
+            embeddable=video["embeddable"],
+        )
+        await update.effective_message.reply_text("✅ Category ویدیو بروزرسانی شد.")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def held_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    channel = _selected_channel(update.effective_user.id)
+    if not channel or not context.args:
+        await update.effective_message.reply_text("استفاده: /held VIDEO_ID")
+        return
+    video_id = context.args[0]
+    try:
+        payload = await asyncio.to_thread(list_video_comments, channel.id, video_id, "heldForReview")
+        items = payload.get("items", [])[:10]
+        if not items:
+            await update.effective_message.reply_text("Comment در انتظار بررسی وجود ندارد.")
+            return
+        lines = ["🛡 Comments در انتظار بررسی:"]
+        for item in items:
+            lines.append(f"• {item['author']}: {item['text'][:180]}\nID: {item['comment_id']}")
+        await update.effective_message.reply_text("\n\n".join(lines))
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def moderate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    channel = _selected_channel(update.effective_user.id)
+    if not channel or len(context.args) < 3:
+        await update.effective_message.reply_text("استفاده: /moderate VIDEO_ID COMMENT_ID approve|reject [ban]")
+        return
+    video_id, comment_id, action = context.args[:3]
+    if action not in {"approve", "reject"}:
+        await update.effective_message.reply_text("action باید approve یا reject باشد.")
+        return
+    try:
+        await asyncio.to_thread(
+            moderate_comment,
+            channel.id,
+            video_id,
+            comment_id,
+            "published" if action == "approve" else "rejected",
+            len(context.args) > 3 and context.args[3].lower() == "ban",
+        )
+        await update.effective_message.reply_text("✅ وضعیت Comment بروزرسانی شد.")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def captions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    channel = _selected_channel(update.effective_user.id)
+    if not channel or not context.args:
+        await update.effective_message.reply_text("استفاده: /captions VIDEO_ID")
+        return
+    try:
+        rows = await asyncio.to_thread(list_video_captions, channel.id, context.args[0])
+        if not rows:
+            await update.effective_message.reply_text("Caption دستی وجود ندارد.")
+            return
+        await update.effective_message.reply_text("\n".join(["📄 Captionها:"] + [f"• {x['name']} · {x['language']} · {x['status']}\nID: {x['caption_id']}" for x in rows]))
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def deletecaption_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    channel = _selected_channel(update.effective_user.id)
+    if not channel or len(context.args) < 2:
+        await update.effective_message.reply_text("استفاده: /deletecaption VIDEO_ID CAPTION_ID")
+        return
+    try:
+        await asyncio.to_thread(delete_caption, channel.id, context.args[0], context.args[1])
+        await update.effective_message.reply_text("✅ Caption حذف شد.")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def editplaylist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    channel = _selected_channel(update.effective_user.id)
+    if not channel or len(context.args) < 3 or context.args[1] not in {"public", "unlisted", "private"}:
+        await update.effective_message.reply_text("استفاده: /editplaylist PLAYLIST_ID private عنوان جدید")
+        return
+    playlist_id = context.args[0]
+    privacy = context.args[1]
+    title = " ".join(context.args[2:])
+    try:
+        await asyncio.to_thread(update_playlist, channel.id, playlist_id, title, "", privacy)
+        await update.effective_message.reply_text("✅ Playlist بروزرسانی شد.")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def deleteplaylist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    channel = _selected_channel(update.effective_user.id)
+    if not channel or not context.args:
+        await update.effective_message.reply_text("استفاده: /deleteplaylist PLAYLIST_ID")
+        return
+    playlist_id = context.args[0]
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🗑 حذف Playlist", callback_data=f"delpl:{channel.id}:{playlist_id}"),
+        InlineKeyboardButton("لغو", callback_data="noop"),
+    ]])
+    await update.effective_message.reply_text("Playlist حذف شود؟ ویدیوهای داخل آن حذف نمی‌شوند.", reply_markup=kb)
+
+
 async def thumbnail_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
