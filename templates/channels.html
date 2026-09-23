@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}کانال‌ها | YT Manager{% endblock %}
+{% block heading %}کانال‌های YouTube{% endblock %}
+{% block subheading %}اتصال چند کانال با OAuth مستقل و مدیریت جداگانه{% endblock %}
+{% block content %}
+<section class="card connect-card">
+  <div><h2>اتصال کانال جدید</h2><p>با Google OAuth وارد شوید و حساب/Brand Channel موردنظر را انتخاب کنید.</p></div>
+  <form method="post" action="{{ url_for('channels_connect') }}" class="connect-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input name="label" placeholder="نام داخلی کانال؛ مثلاً کانال اصلی" maxlength="120">
+    <button class="btn primary">اتصال با Google</button>
+  </form>
+</section>
+<section class="channel-grid">
+  {% for channel in channels %}
+  <article class="channel-card">
+    <div class="channel-top">
+      {% if channel.thumbnail_url %}<img src="{{ channel.thumbnail_url }}" alt="">{% else %}<div class="avatar big">YT</div>{% endif %}
+      <div class="grow"><span class="pill {{ 'success' if channel.is_active else 'muted' }}">{{ 'فعال' if channel.is_active else 'غیرفعال' }}</span><h2>{{ channel.label }}</h2><p>{{ channel.title }}</p></div>
+    </div>
+    <div class="stats three"><div><strong>{{ '{:,}'.format(channel.subscriber_count) }}</strong><span>مشترک</span></div><div><strong>{{ '{:,}'.format(channel.view_count) }}</strong><span>بازدید</span></div><div><strong>{{ '{:,}'.format(channel.video_count) }}</strong><span>ویدیو</span></div></div>
+    <div class="channel-meta"><span>Privacy: <b>{{ channel.default_privacy }}</b></span><span>ID: <code>#{{ channel.id }}</code></span></div>
+    <a class="btn wide" href="{{ url_for('channel_detail', channel_id=channel.id) }}">تنظیمات و مدیریت</a>
+  </article>
+  {% else %}<div class="empty card">هیچ کانال YouTube متصل نشده است.</div>{% endfor %}
+</section>
+{% endblock %}
