@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود | YT Manager</title><link rel="stylesheet" href="{{ url_for('static', filename='panel.css') }}"></head>
+<body class="login-page">
+  <div class="login-card">
+    <div class="brand login-brand"><span class="brand-mark">YT</span><div><strong>Shorts Manager</strong><small>Secure Admin Console</small></div></div>
+    <h1>ورود به پنل مدیریت</h1><p>برای مدیریت کانال‌ها و ارسال محتوا وارد شوید.</p>
+    {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endif %}{% endwith %}
+    <form method="post" class="form-grid one">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>نام کاربری<input name="username" autocomplete="username" required></label>
+      <label>رمز عبور<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="btn primary wide">ورود امن</button>
+    </form>
+  </div>
+</body>
+</html>
