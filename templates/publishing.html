@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}انتشار هوشمند | YT Studio{% endblock %}
+{% block eyebrow %}Smart Publisher{% endblock %}
+{% block heading %}انتشار هوشمند و صف ویدیوها{% endblock %}
+{% block subheading %}زمان‌بندی خودکار بر اساس عملکرد تاریخی هر کانال، ظرفیت روزانه و صف محتوای آماده{% endblock %}
+
+{% block content %}
+<section class="smart-publish-hero glass-card">
+  <div class="smart-publish-copy">
+    <div class="smart-publish-icon"><i data-lucide="sparkles"></i></div>
+    <div>
+      <span class="section-kicker">SMART DISTRIBUTION ENGINE</span>
+      <h2>انتشار در بهترین Slot هر کانال</h2>
+      <p>Scheduler با توجه به ساعت انتشار و عملکرد ویدیوهای قبلی، Watch Time و تعامل، برای هر کانال Slotهای پیشنهادی می‌سازد و سقف روزانه را رعایت می‌کند.</p>
+    </div>
+  </div>
+  <div class="smart-publish-summary">
+    <div><span>کانال‌ها</span><strong>{{ channels|length }}</strong></div>
+    <div><span>در انتظار</span><strong>{{ queue|length }}</strong></div>
+    <div><span>حالت</span><strong>Persistent Queue</strong></div>
+  </div>
+</section>
+
+<section class="smart-channel-grid">
+  {% for channel in channels %}
+  {% set cfg = configs.get(channel.id, {}) %}
+  {% set analysis = cfg.get('analysis', {}) %}
+  <article class="glass-card smart-channel-card">
+    <div class="smart-channel-head">
+      <div class="channel-identity">
+        {% if channel.thumbnail_url %}<img src="{{ channel.thumbnail_url }}" alt="{{ channel.title }}">{% else %}<div class="avatar avatar-lg">YT</div>{% endif %}
+        <div class="grow">
+          <span class="section-kicker">CHANNEL #{{ channel.id }}</span>
+          <strong>{{ channel.title }}</strong>
+          <small>{{ channel.custom_url or channel.label }}</small>
+        </div>
+      </div>
+      <span class="scope-badge {{ 'ok' if cfg.get('enabled') else 'warn' }}">
+        <i data-lucide="{{ 'zap' if cfg.get('enabled') else 'pause' }}"></i>
+        {{ 'Auto Publisher ON' if cfg.get('enabled') else 'Manual' }}
+      </span>
+    </div>
+
+    <div class="smart-channel-kpis">
+      <div><span>روزانه</span><strong>{{ cfg.get('videos_per_day', 2) }}</strong><small>ویدیو</small></div>
+      <div><span>Timezone</span><strong>{{ cfg.get('timezone', 'Asia/Tehran') }}</strong></div>
+      <div><span>Confidence</span><strong>{{ analysis.get('confidence', '—')|capitalize }}</strong><small>{{ analysis.get('video_samples', 0) }} samples</small></div>
+    </div>
+
+    <div class="peak-slot-list">
+      <span class="section-kicker">PEAK SLOTS</span>
+      <div class="peak-chips">
+        {% for slot in cfg.get('peak_slots', []) %}
+        <span class="peak-chip"><i data-lucide="clock-3"></i>{{ '%02d:00'|format(slot.hour) }}<small>{{ slot.samples }} نمونه</small></span>
+        {% else %}
+        <span class="peak-chip muted">هنوز تحلیل نشده</span>
+        {% endfor %}
+      </div>
+      {% if analysis.get('top_country') or analysis.get('top_device') %}
+      <div class="smart-audience-meta">
+        {% if analysis.get('top_country') %}<span><i data-lucide="globe-2"></i>{{ analysis.top_country }}</span>{% endif %}
+        {% if analysis.get('top_device') %}<span><i data-lucide="smartphone"></i>{{ analysis.top_device }}</span>{% endif %}
+      </div>
+      {% endif %}
+    </div>
+
+    <details class="smart-settings-panel">
+      <summary class="btn btn-soft"><i data-lucide="sliders-horizontal"></i> تنظیمات این کانال</summary>
+      <form method="post" action="{{ url_for('publishing_settings', channel_id=channel.id) }}" class="form-grid two-cols">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="toggle-row span-2"><input type="checkbox" name="enabled" {% if cfg.get('enabled') %}checked{% endif %}><span><strong>Auto Publisher فعال</strong><small>ویدیوهای جدید به‌صورت هوشمند زمان‌بندی شوند</small></span></label>
+        <label class="toggle-row span-2"><input type="checkbox" name="smart_peak_enabled" {% if cfg.get('smart_peak_enabled', True) %}checked{% endif %}><span><strong>Smart Peak</strong><small>استفاده از Slotهای تحلیل‌شده به‌جای ساعت دستی</small></span></label>
+        <label>ویدیو در روز<input type="number" name="videos_per_day" min="1" max="12" value="{{ cfg.get('videos_per_day', 2) }}"></label>
+        <label>Timezone<input name="timezone" value="{{ cfg.get('timezone', 'Asia/Tehran') }}" placeholder="Asia/Tehran"></label>
+        <label>شروع بازه مجاز<input type="number" name="allowed_start_hour" min="0" max="23" value="{{ cfg.get('allowed_start_hour', 9) }}"></label>
+        <label>پایان بازه مجاز<input type="number" name="allowed_end_hour" min="0" max="23" value="{{ cfg.get('allowed_end_hour', 23) }}"></label>
+        <label>حداقل فاصله (دقیقه)<input type="number" name="minimum_gap_minutes" min="30" max="720" value="{{ cfg.get('minimum_gap_minutes', 180) }}"></label>
+        <label>ساعت‌های دستی<input name="manual_slots" value="{{ cfg.get('manual_slots', [])|join(',') }}" placeholder="12,18,21"></label>
+        <label class="toggle-row span-2"><input type="checkbox" name="reschedule_waiting"><span><strong>زمان‌بندی مجدد صف فعلی</strong><small>آیتم‌های Smart منتظر با تنظیمات جدید دوباره Slot می‌گیرند</small></span></label>
+        <button class="btn btn-primary span-2"><i data-lucide="save"></i> ذخیره تنظیمات</button>
+      </form>
+    </details>
+
+    <div class="smart-channel-actions">
+      <form method="post" action="{{ url_for('publishing_analyze', channel_id=channel.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-primary"><i data-lucide="brain-circuit"></i> تحلیل مجدد Peak</button>
+      </form>
+      <a class="btn btn-soft" href="{{ url_for('channel_detail', channel_id=channel.id) }}"><i data-lucide="chart-no-axes-combined"></i> Analytics</a>
+    </div>
+
+    <details class="bulk-queue-panel">
+      <summary class="btn btn-soft"><i data-lucide="list-plus"></i> افزودن گروهی به صف</summary>
+      <form method="post" action="{{ url_for('publishing_bulk_queue', channel_id=channel.id) }}" class="form-grid one">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>هر خط: URL | Title
+          <textarea name="items" rows="6" placeholder="https://instagram.com/reel/... | عنوان ویدیوی اول&#10;https://instagram.com/reel/... | عنوان ویدیوی دوم" required></textarea>
+        </label>
+        <button class="btn btn-primary"><i data-lucide="calendar-plus"></i> ساخت صف هوشمند</button>
+      </form>
+    </details>
+  </article>
+  {% else %}
+  <div class="empty-state glass-card full-span"><i data-lucide="radio-tower"></i><h3>کانالی متصل نیست</h3><p>ابتدا یک کانال YouTube متصل کن.</p></div>
+  {% endfor %}
+</section>
+
+<section class="section-block">
+  <div class="section-title-row">
+    <div><span class="section-kicker">PENDING UPLOADS</span><h2>ویدیوهای در انتظار انتشار</h2><p>صف پایدار Scheduler؛ زمان‌ها با Timezone همان کانال نمایش داده می‌شوند.</p></div>
+    <a class="btn btn-primary" href="{{ url_for('upload') }}"><i data-lucide="plus"></i> ویدیوی جدید</a>
+  </div>
+
+  <div class="glass-card smart-queue-table">
+    <div class="responsive-table">
+      <table class="modern-table">
+        <thead><tr><th>Job</th><th>کانال</th><th>عنوان</th><th>زمان انتشار</th><th>Mode</th><th>Score</th><th>عملیات</th></tr></thead>
+        <tbody>
+        {% for item in queue %}
+        <tr>
+          <td><span class="mono">#{{ item.job_id }}</span></td>
+          <td><strong>{{ item.channel_label }}</strong><small>{{ item.channel_title }}</small></td>
+          <td><strong>{{ item.title }}</strong><small>{{ item.source }}</small></td>
+          <td><strong>{{ item.scheduled_local.strftime('%Y-%m-%d %H:%M') }}</strong><small>{{ configs.get(item.channel_id, {}).get('timezone', '') }}</small></td>
+          <td><span class="status-pill status-scheduled">{{ item.schedule_mode }}</span></td>
+          <td>{{ '%.1f'|format(item.score) }}</td>
+          <td>
+            <div class="queue-actions">
+              <form method="post" action="{{ url_for('queue_publish_now', job_id=item.job_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-soft"><i data-lucide="rocket"></i> الان</button></form>
+              <form method="post" action="{{ url_for('queue_cancel', job_id=item.job_id) }}" onsubmit="return confirm('این ویدیو از صف حذف شود؟')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="icon-btn danger"><i data-lucide="x"></i></button></form>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7"><div class="table-empty">صف انتشار خالی است.</div></td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="smart-method-note glass-card">
+  <i data-lucide="info"></i>
+  <div><strong>Smart Peak چگونه محاسبه می‌شود؟</strong><p>API عمومی YouTube Heatmap ساعتی «بیننده‌ها آنلاین‌اند» را ارائه نمی‌دهد. سیستم از ساعت انتشار ویدیوهای قبلی همان کانال، سرعت View، تعامل، Watch Time و سیگنال‌های Audience برای رتبه‌بندی Slotها استفاده می‌کند؛ بنابراین Confidence با افزایش تاریخچه بهتر می‌شود.</p></div>
+</section>
+{% endblock %}
