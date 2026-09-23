@@ -8,7 +8,7 @@
 <section class="video-studio-hero glass-card">
   <div class="video-studio-preview">
     {% if video.thumbnail_url %}<img src="{{ video.thumbnail_url }}" alt="{{ video.title }}">{% endif %}
-    <span class="video-duration">{{ duration(video.duration_seconds) }}</span>
+    <span class="video-duration">{{ format_duration(video.duration_seconds) }}</span>
   </div>
   <div class="video-studio-info grow">
     <div class="video-studio-kicker">
