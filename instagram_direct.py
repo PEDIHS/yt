@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -302,6 +302,13 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
                 if exists:
                     continue
                 sender_id, sender_username = _sender_for_item(thread, item)
+                recent_duplicate = db.query(InstagramDirectShare.id).filter(
+                    InstagramDirectShare.media_url == media["url"],
+                    InstagramDirectShare.sender_id == sender_id[:128],
+                    InstagramDirectShare.detected_at >= datetime.utcnow() - timedelta(minutes=10),
+                ).first()
+                if recent_duplicate:
+                    continue
                 row = InstagramDirectShare(
                     item_key=item_key[:255],
                     thread_id=thread_id[:255],
