@@ -73,7 +73,7 @@
       <article class="video-manager-card glass-card">
         <a class="video-manager-thumb" href="{{ url_for('video_detail', channel_id=selected_channel.id, video_id=video.video_id) }}">
           {% if video.thumbnail_url %}<img src="{{ video.thumbnail_url }}" alt="{{ video.title }}">{% endif %}
-          <span class="video-duration">{{ duration(video.duration_seconds) }}</span>
+          <span class="video-duration">{{ format_duration(video.duration_seconds) }}</span>
           <span class="video-privacy privacy-{{ video.privacy }}">{{ video.privacy }}</span>
         </a>
         <div class="video-manager-body">
