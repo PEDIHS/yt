@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  syntax-check:
+  checks:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -15,5 +15,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
       - name: Compile Python sources
-        run: python -m compileall -q main.py downloader.py uploader.py
+        run: python -m compileall -q config.py db.py models.py security.py downloader.py youtube.py jobs.py main.py panel.py
+      - name: Import core modules
+        env:
+          SECRET_KEY: ci-secret
+          PANEL_PASSWORD: ci-password
+          TELEGRAM_BOT_TOKEN: 123456:ci
+          TELEGRAM_ADMIN_IDS: 1
+        run: python -c "import config, db, models, security, downloader, youtube, jobs"
