@@ -34,6 +34,7 @@
       {% endfor %}
     </div>
     <div class="hero-action-buttons">
+      <a class="btn btn-primary" href="{{ url_for('videos_manager', channel_id=channel.id) }}"><i data-lucide="clapperboard"></i> مدیریت ویدیوها</a>
       <form method="post" action="{{ url_for('channel_analytics_sync', channel_id=channel.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="days" value="{{ selected_days }}">
@@ -103,6 +104,40 @@
   </article>
 </section>
 
+<section class="audience-insights-grid">
+  <article class="glass-card chart-card">
+    <div class="card-heading"><div><span class="section-kicker">DISCOVERY</span><h2>منابع ورودی</h2><p>Traffic Source بازدیدها در بازه انتخابی</p></div><span class="data-chip"><i data-lucide="route"></i>Traffic</span></div>
+    <div id="trafficSourcesChart" class="chart chart-md"></div>
+  </article>
+  <article class="glass-card chart-card">
+    <div class="card-heading"><div><span class="section-kicker">AUDIENCE DEVICE</span><h2>نوع دستگاه</h2><p>سهم Mobile، Desktop، TV و سایر دستگاه‌ها</p></div><span class="data-chip"><i data-lucide="smartphone"></i>Device</span></div>
+    <div id="devicesChart" class="chart chart-md"></div>
+  </article>
+  <article class="glass-card chart-card">
+    <div class="card-heading"><div><span class="section-kicker">GEOGRAPHY</span><h2>کشورهای برتر</h2><p>بیشترین Views بر اساس کشور</p></div><span class="data-chip"><i data-lucide="globe-2"></i>Geo</span></div>
+    <div id="countriesChart" class="chart chart-md"></div>
+  </article>
+</section>
+
+<section class="audience-summary-row">
+  <article class="glass-card audience-summary-card">
+    <div><span class="section-kicker">SUBSCRIBED STATUS</span><h3>Subscriber vs Non-subscriber</h3></div>
+    <div class="audience-mini-list">
+      {% for item in analytics.audience.subscribed_status %}
+      <div><span>{{ item.status }}</span><strong>{{ compact_number(item.views) }}</strong><small>Views</small></div>
+      {% else %}<div><span>داده کافی نیست</span><strong>—</strong></div>{% endfor %}
+    </div>
+  </article>
+  <article class="glass-card audience-summary-card">
+    <div><span class="section-kicker">CONTENT TYPE</span><h3>نوع محتوای پربازدید</h3></div>
+    <div class="audience-mini-list">
+      {% for item in analytics.audience.content_types %}
+      <div><span>{{ item.type }}</span><strong>{{ compact_number(item.views) }}</strong><small>Views</small></div>
+      {% else %}<div><span>داده کافی نیست</span><strong>—</strong></div>{% endfor %}
+    </div>
+  </article>
+</section>
+
 <section class="section-block">
   <div class="section-title-row">
     <div><span class="section-kicker">Content Performance</span><h2>ویدیوهای برتر</h2><p>آمار بازه‌ای Analytics در کنار آمار فعلی Data API</p></div>
@@ -116,7 +151,7 @@
         {% for video in analytics.top_videos %}
           <tr>
             <td>
-              <a class="video-cell" href="{{ video.url }}" target="_blank" rel="noopener">
+              <a class="video-cell" href="{{ url_for('video_detail', channel_id=channel.id, video_id=video.video_id) }}">
                 {% if video.thumbnail_url %}<img src="{{ video.thumbnail_url }}" alt="">{% endif %}
                 <span><strong>{{ video.title }}</strong><small>{{ video.published_at[:10] if video.published_at else video.video_id }}</small></span>
               </a>
@@ -141,7 +176,7 @@
   <div class="section-title-row"><div><span class="section-kicker">Latest Uploads</span><h2>آخرین ویدیوهای کانال</h2><p>آمار فعلی مستقیم از YouTube Data API</p></div></div>
   <div class="video-grid">
     {% for video in analytics.latest_videos %}
-    <a class="video-card glass-card" href="{{ video.url }}" target="_blank" rel="noopener">
+    <a class="video-card glass-card" href="{{ url_for('video_detail', channel_id=channel.id, video_id=video.video_id) }}">
       <div class="video-thumb">{% if video.thumbnail_url %}<img src="{{ video.thumbnail_url }}" alt="">{% endif %}<span class="duration-badge">{{ format_duration(video.duration_seconds) }}</span></div>
       <div class="video-card-body"><strong>{{ video.title }}</strong><small>{{ video.published_at[:10] }}</small><div class="video-card-stats"><span><i data-lucide="eye"></i>{{ compact_number(video.views) }}</span><span><i data-lucide="thumbs-up"></i>{{ compact_number(video.likes) }}</span><span><i data-lucide="message-square"></i>{{ compact_number(video.comments) }}</span></div></div>
     </a>
@@ -172,6 +207,8 @@
         <div><span>Upload API</span><b class="positive">{{ 'Connected' if authorization.upload else 'Missing' }}</b></div>
         <div><span>Read API</span><b class="positive">{{ 'Connected' if authorization.read else 'Missing' }}</b></div>
         <div><span>Analytics API</span><b class="{{ 'positive' if authorization.analytics else 'warning-text' }}">{{ 'Connected' if authorization.analytics else 'Reconnect required' }}</b></div>
+        <div><span>Video Manager</span><b class="{{ 'positive' if authorization.manage else 'warning-text' }}">{{ 'Connected' if authorization.manage else 'Reconnect required' }}</b></div>
+        <div><span>Comments & Captions</span><b class="{{ 'positive' if authorization.force_ssl else 'warning-text' }}">{{ 'Connected' if authorization.force_ssl else 'Reconnect required' }}</b></div>
         <div><span>آخرین Sync پایه</span><b>{{ channel.last_synced_at.strftime('%Y-%m-%d %H:%M') if channel.last_synced_at else '—' }}</b></div>
       </div>
       <form method="post" action="{{ url_for('channel_refresh', channel_id=channel.id) }}">
