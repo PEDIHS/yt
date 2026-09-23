@@ -26,6 +26,7 @@ def _parse_admin_ids(value: str) -> set[int]:
 
 class Config:
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    TELEGRAM_BOT_TOKEN_FILE = os.getenv("TELEGRAM_BOT_TOKEN_FILE", "").strip()
     TELEGRAM_ADMIN_IDS = _parse_admin_ids(os.getenv("TELEGRAM_ADMIN_IDS", ""))
 
     PANEL_USERNAME = os.getenv("PANEL_USERNAME", "admin").strip()
@@ -58,7 +59,6 @@ class Config:
 
     @classmethod
     def validate_bot(cls) -> None:
-        if not cls.TELEGRAM_BOT_TOKEN:
-            raise RuntimeError("TELEGRAM_BOT_TOKEN must be set in .env")
-        if not cls.TELEGRAM_ADMIN_IDS:
-            raise RuntimeError("TELEGRAM_ADMIN_IDS must contain at least one Telegram user ID")
+        token_file_ok = bool(cls.TELEGRAM_BOT_TOKEN_FILE and Path(cls.TELEGRAM_BOT_TOKEN_FILE).is_file())
+        if not cls.TELEGRAM_BOT_TOKEN and not token_file_ok:
+            raise RuntimeError("Configure TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN_FILE")
