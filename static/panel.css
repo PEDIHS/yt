@@ -119,6 +119,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:rgba(5,8
 .integration-icon{width:45px;height:45px;display:grid;place-items:center;border-radius:14px;flex:0 0 auto;border:1px solid var(--line)}
 .integration-icon svg{width:20px}.integration-icon.telegram{color:#6db9ff;background:rgba(59,130,246,.09);border-color:rgba(59,130,246,.18)}
 .integration-icon.google{color:#ff667d;background:rgba(255,54,84,.08);border-color:rgba(255,54,84,.18)}
+.integration-icon.instagram{color:#f472b6;background:linear-gradient(135deg,rgba(139,92,246,.10),rgba(244,114,182,.10),rgba(251,191,36,.06));border-color:rgba(244,114,182,.18)}
 .integration-status-list{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:16px 0}
 .integration-status-list>div{background:rgba(5,8,14,.38);border:1px solid rgba(148,163,184,.08);border-radius:12px;padding:11px}
 .integration-status-list span,.integration-status-list strong{display:block}.integration-status-list span{font-size:8px;color:#68748a}.integration-status-list strong{font-size:11px;margin-top:3px}
