@@ -2,33 +2,109 @@
 <html lang="fa" dir="rtl">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{% block title %}YT Manager{% endblock %}</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#070910">
+  <title>{% block title %}YT Studio Manager{% endblock %}</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
   <link rel="stylesheet" href="{{ url_for('static', filename='panel.css') }}">
+  {% block head %}{% endblock %}
 </head>
 <body>
-  <div class="shell">
-    <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">YT</span><div><strong>Shorts Manager</strong><small>Multi-channel Console</small></div></div>
-      <nav>
-        <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">داشبورد</a>
-        <a href="{{ url_for('channels') }}" class="{% if request.endpoint in ['channels','channel_detail'] %}active{% endif %}">کانال‌ها</a>
-        <a href="{{ url_for('upload') }}" class="{% if request.endpoint == 'upload' %}active{% endif %}">ارسال محتوا</a>
-        <a href="{{ url_for('jobs') }}" class="{% if request.endpoint == 'jobs' %}active{% endif %}">تاریخچه و Jobها</a>
-      </nav>
-      <div class="sidebar-foot">
-        <span class="dot online"></span> سرویس فعال
-        <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="link-btn">خروج</button></form>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+  <div class="ambient ambient-c"></div>
+
+  <div class="app-shell">
+    <aside class="sidebar glass-panel" id="sidebar">
+      <div class="sidebar-header">
+        <a class="brand" href="{{ url_for('dashboard') }}">
+          <span class="brand-mark"><i data-lucide="youtube"></i></span>
+          <span class="brand-copy">
+            <strong>YT Studio</strong>
+            <small>Multi‑Channel Manager</small>
+          </span>
+        </a>
+        <button class="icon-btn sidebar-close" type="button" data-sidebar-close aria-label="بستن منو">
+          <i data-lucide="x"></i>
+        </button>
       </div>
+
+      <div class="nav-caption">نمای کلی</div>
+      <nav class="side-nav">
+        <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">
+          <i data-lucide="layout-dashboard"></i><span>داشبورد و آمار</span>
+        </a>
+        <a href="{{ url_for('channels') }}" class="{% if request.endpoint in ['channels','channel_detail'] %}active{% endif %}">
+          <i data-lucide="radio-tower"></i><span>کانال‌های YouTube</span>
+        </a>
+      </nav>
+
+      <div class="nav-caption">انتشار و عملیات</div>
+      <nav class="side-nav">
+        <a href="{{ url_for('upload') }}" class="{% if request.endpoint == 'upload' %}active{% endif %}">
+          <i data-lucide="send"></i><span>ارسال محتوا</span>
+        </a>
+        <a href="{{ url_for('jobs') }}" class="{% if request.endpoint == 'jobs' %}active{% endif %}">
+          <i data-lucide="list-checks"></i><span>Jobها و تاریخچه</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-spacer"></div>
+      <div class="system-card">
+        <div class="system-card-head">
+          <span class="status-orb"></span>
+          <div><strong>سرویس آنلاین</strong><small>YouTube API + Worker</small></div>
+        </div>
+        <div class="system-card-meta"><span>OAuth امن</span><span>Analytics v2</span></div>
+      </div>
+
+      <form method="post" action="{{ url_for('logout') }}" class="logout-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="side-logout"><i data-lucide="log-out"></i><span>خروج از پنل</span></button>
+      </form>
     </aside>
-    <main class="content">
-      <header class="topbar"><div><h1>{% block heading %}مدیریت YouTube{% endblock %}</h1><p>{% block subheading %}کنترل مستقل کانال‌ها، ارسال‌ها و تنظیمات{% endblock %}</p></div></header>
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}<div class="flash-stack">{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}
-      {% endwith %}
-      {% block content %}{% endblock %}
+
+    <main class="main-area">
+      <header class="topbar">
+        <div class="topbar-title">
+          <button class="icon-btn mobile-menu" type="button" data-sidebar-open aria-label="باز کردن منو">
+            <i data-lucide="menu"></i>
+          </button>
+          <div>
+            <div class="eyebrow">{% block eyebrow %}YouTube Operations Center{% endblock %}</div>
+            <h1>{% block heading %}مدیریت YouTube{% endblock %}</h1>
+            <p>{% block subheading %}آمار، انتشار و کنترل کانال‌ها در یک پنل{% endblock %}</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <div class="api-badge"><span class="status-orb"></span><span>YouTube API</span></div>
+          <a class="btn btn-soft desktop-action" href="{{ url_for('channels') }}"><i data-lucide="plus"></i> اتصال کانال</a>
+          <a class="btn btn-primary desktop-action" href="{{ url_for('upload') }}"><i data-lucide="upload-cloud"></i> انتشار جدید</a>
+        </div>
+      </header>
+
+      <section class="page-content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+          <div class="flash-stack">
+            {% for category, message in messages %}
+            <div class="flash {{ category }}">
+              <i data-lucide="{% if category == 'success' %}circle-check{% elif category == 'danger' %}circle-x{% elif category == 'warning' %}triangle-alert{% else %}info{% endif %}"></i>
+              <span>{{ message }}</span>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+      </section>
     </main>
   </div>
+
+  <div class="sidebar-backdrop" data-sidebar-backdrop></div>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="{{ url_for('static', filename='panel.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

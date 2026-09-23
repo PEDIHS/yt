@@ -1,25 +1,191 @@
 {% extends "base.html" %}
-{% block title %}{{ channel.label }} | YT Manager{% endblock %}
+{% block title %}{{ channel.label }} Analytics | YT Studio{% endblock %}
+{% block eyebrow %}Channel Intelligence{% endblock %}
 {% block heading %}{{ channel.label }}{% endblock %}
-{% block subheading %}مدیریت مستقل تنظیمات انتشار و وضعیت کانال{% endblock %}
+{% block subheading %}Analytics، ویدیوها و تنظیمات مستقل {{ channel.title }}{% endblock %}
+
 {% block content %}
-<div class="grid two channel-detail-grid">
-  <section class="card profile-card">
-    <div class="channel-top">{% if channel.thumbnail_url %}<img src="{{ channel.thumbnail_url }}" alt="">{% else %}<div class="avatar big">YT</div>{% endif %}<div><h2>{{ channel.title }}</h2><p>{{ channel.custom_url or channel.youtube_channel_id }}</p></div></div>
-    <div class="stats three"><div><strong>{{ '{:,}'.format(channel.subscriber_count) }}</strong><span>مشترک</span></div><div><strong>{{ '{:,}'.format(channel.view_count) }}</strong><span>بازدید</span></div><div><strong>{{ '{:,}'.format(channel.video_count) }}</strong><span>ویدیو</span></div></div>
-    <form method="post" action="{{ url_for('channel_refresh', channel_id=channel.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn wide">همگام‌سازی آمار از YouTube</button></form>
-  </section>
-  <section class="card">
-    <div class="card-head"><div><h2>تنظیمات کانال</h2><p>این مقادیر فقط روی همین کانال اعمال می‌شوند.</p></div></div>
-    <form method="post" class="form-grid one">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>نام داخلی<input name="label" value="{{ channel.label }}" maxlength="120" required></label>
-      <label>هشتگ‌های پیش‌فرض<textarea name="default_hashtags" rows="4">{{ channel.default_hashtags }}</textarea></label>
-      <label>Privacy پیش‌فرض<select name="default_privacy"><option value="public" {% if channel.default_privacy=='public' %}selected{% endif %}>Public</option><option value="unlisted" {% if channel.default_privacy=='unlisted' %}selected{% endif %}>Unlisted</option><option value="private" {% if channel.default_privacy=='private' %}selected{% endif %}>Private</option></select></label>
-      <label class="check"><input type="checkbox" name="is_active" {% if channel.is_active %}checked{% endif %}><span>کانال برای ارسال فعال باشد</span></label>
-      <button class="btn primary">ذخیره تنظیمات</button>
+<section class="channel-hero glass-card">
+  <div class="channel-hero-profile">
+    {% if channel.thumbnail_url %}<img class="channel-avatar-xl" src="{{ channel.thumbnail_url }}" alt="{{ channel.title }}">{% else %}<div class="avatar avatar-xl">YT</div>{% endif %}
+    <div class="grow">
+      <div class="label-line">
+        <span class="status-dot {{ 'active' if channel.is_active else 'inactive' }}"></span>
+        <span class="section-kicker">{{ 'Active channel' if channel.is_active else 'Paused channel' }}</span>
+      </div>
+      <h2>{{ channel.title }}</h2>
+      <div class="channel-handle">{{ channel.custom_url or channel.youtube_channel_id }}</div>
+      <div class="channel-badges">
+        <span class="data-chip"><i data-lucide="shield-check"></i> OAuth connected</span>
+        <span class="data-chip {% if authorization.analytics %}chip-success{% else %}chip-warning{% endif %}">
+          <i data-lucide="{% if authorization.analytics %}chart-no-axes-combined{% else %}triangle-alert{% endif %}"></i>
+          Analytics {{ 'enabled' if authorization.analytics else 'needs reconnect' }}
+        </span>
+        <span class="data-chip"><i data-lucide="lock-keyhole"></i> {{ channel.default_privacy }}</span>
+      </div>
+    </div>
+  </div>
+  <div class="channel-hero-actions">
+    <div class="period-switcher">
+      {% for days in analytics_periods %}
+      <a href="{{ url_for('channel_detail', channel_id=channel.id, days=days) }}" class="{% if selected_days == days %}active{% endif %}">
+        {% if days == 7 %}۷ روز{% elif days == 28 %}۲۸ روز{% elif days == 90 %}۹۰ روز{% else %}۱ سال{% endif %}
+      </a>
+      {% endfor %}
+    </div>
+    <div class="hero-action-buttons">
+      <form method="post" action="{{ url_for('channel_analytics_sync', channel_id=channel.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="days" value="{{ selected_days }}">
+        <button class="btn btn-primary"><i data-lucide="refresh-cw"></i> Sync Analytics</button>
+      </form>
+      <form method="post" action="{{ url_for('channels_connect') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="label" value="{{ channel.label }}">
+        <button class="btn btn-soft"><i data-lucide="key-round"></i> Reconnect OAuth</button>
+      </form>
+    </div>
+  </div>
+</section>
+
+{% if analytics_error %}
+<section class="notice-card notice-danger">
+  <div class="notice-icon"><i data-lucide="triangle-alert"></i></div>
+  <div class="grow"><strong>Analytics کامل در دسترس نیست</strong><p>{{ analytics_error }}</p></div>
+  {% if not authorization.analytics %}
+  <form method="post" action="{{ url_for('channels_connect') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="label" value="{{ channel.label }}">
+    <button class="btn btn-primary">Reconnect با دسترسی Analytics</button>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="kpi-grid channel-kpis">
+  <article class="kpi-card glass-card tone-red"><div class="kpi-head"><span>Lifetime Views</span><span class="kpi-icon"><i data-lucide="eye"></i></span></div><strong>{{ compact_number(channel.view_count) }}</strong><small>کل بازدید ثبت‌شده کانال</small></article>
+  <article class="kpi-card glass-card tone-violet"><div class="kpi-head"><span>Subscribers</span><span class="kpi-icon"><i data-lucide="users"></i></span></div><strong>{{ compact_number(channel.subscriber_count) }}</strong><small>تعداد فعلی سابسکرایبر</small></article>
+  <article class="kpi-card glass-card tone-blue"><div class="kpi-head"><span>Videos</span><span class="kpi-icon"><i data-lucide="clapperboard"></i></span></div><strong>{{ compact_number(channel.video_count) }}</strong><small>کل ویدیوهای کانال</small></article>
+  {% if analytics %}
+  <article class="kpi-card glass-card tone-cyan"><div class="kpi-head"><span>Period Views</span><span class="kpi-icon"><i data-lucide="activity"></i></span></div><strong>{{ compact_number(analytics.summary.views) }}</strong><small>{% if analytics.changes.views is not none %}<span class="trend-chip {{ 'up' if analytics.changes.views >= 0 else 'down' }}">{{ '+' if analytics.changes.views > 0 else '' }}{{ analytics.changes.views }}٪</span>{% endif %} نسبت به بازه قبل</small></article>
+  <article class="kpi-card glass-card tone-pink"><div class="kpi-head"><span>Likes</span><span class="kpi-icon"><i data-lucide="thumbs-up"></i></span></div><strong>{{ compact_number(analytics.summary.likes) }}</strong><small>{% if analytics.changes.likes is not none %}<span class="trend-chip {{ 'up' if analytics.changes.likes >= 0 else 'down' }}">{{ '+' if analytics.changes.likes > 0 else '' }}{{ analytics.changes.likes }}٪</span>{% endif %} {{ compact_number(analytics.summary.comments) }} کامنت</small></article>
+  <article class="kpi-card glass-card tone-green"><div class="kpi-head"><span>Net Subscribers</span><span class="kpi-icon"><i data-lucide="user-plus"></i></span></div><strong class="{% if analytics.summary.subscribers_net < 0 %}negative{% endif %}">{% if analytics.summary.subscribers_net > 0 %}+{% endif %}{{ compact_number(analytics.summary.subscribers_net) }}</strong><small><span class="trend-chip {{ 'up' if analytics.changes.subscribers_net_delta >= 0 else 'down' }}">{{ '+' if analytics.changes.subscribers_net_delta > 0 else '' }}{{ compact_number(analytics.changes.subscribers_net_delta) }}</span> نسبت به بازه قبل</small></article>
+  <article class="kpi-card glass-card tone-amber"><div class="kpi-head"><span>Watch Time</span><span class="kpi-icon"><i data-lucide="clock-3"></i></span></div><strong>{{ compact_number(analytics.summary.watch_minutes) }}</strong><small>{% if analytics.changes.watch_minutes is not none %}<span class="trend-chip {{ 'up' if analytics.changes.watch_minutes >= 0 else 'down' }}">{{ '+' if analytics.changes.watch_minutes > 0 else '' }}{{ analytics.changes.watch_minutes }}٪</span>{% endif %} دقیقه تماشا</small></article>
+  <article class="kpi-card glass-card tone-slate"><div class="kpi-head"><span>Avg View Duration</span><span class="kpi-icon"><i data-lucide="timer"></i></span></div><strong>{{ format_duration(analytics.summary.average_view_duration) }}</strong><small>میانگین مدت مشاهده</small></article>
+  {% else %}
+  <article class="kpi-card glass-card kpi-placeholder"><div class="kpi-head"><span>Analytics</span><span class="kpi-icon"><i data-lucide="chart-spline"></i></span></div><strong>—</strong><small>برای دریافت آمار Sync کنید</small></article>
+  {% endif %}
+</section>
+
+{% if analytics %}
+<section class="analytics-layout channel-chart-layout">
+  <article class="glass-card chart-card chart-card-main">
+    <div class="card-heading">
+      <div><span class="section-kicker">Daily Performance</span><h2>Views و رشد Subscriber</h2><p>{{ analytics.start_date }} تا {{ analytics.end_date }}</p></div>
+      <span class="data-chip"><i data-lucide="cloud"></i> YouTube Analytics</span>
+    </div>
+    <div id="channelPerformanceChart" class="chart chart-lg"></div>
+  </article>
+  <article class="glass-card chart-card">
+    <div class="card-heading"><div><span class="section-kicker">Engagement</span><h2>تعامل مخاطبان</h2><p>Like، Comment و Share روزانه</p></div></div>
+    <div id="engagementChart" class="chart chart-md"></div>
+  </article>
+</section>
+
+<section class="analytics-layout equal">
+  <article class="glass-card chart-card">
+    <div class="card-heading"><div><span class="section-kicker">Retention Signal</span><h2>Watch Time و میانگین مشاهده</h2><p>روند زمان تماشا و Average View Duration</p></div></div>
+    <div id="watchTimeChart" class="chart chart-md"></div>
+  </article>
+  <article class="glass-card chart-card">
+    <div class="card-heading"><div><span class="section-kicker">Top Content</span><h2>ویدیوهای برتر بازه</h2><p>رتبه‌بندی بر اساس Views در Analytics API</p></div></div>
+    <div id="topVideosChart" class="chart chart-md"></div>
+  </article>
+</section>
+
+<section class="section-block">
+  <div class="section-title-row">
+    <div><span class="section-kicker">Content Performance</span><h2>ویدیوهای برتر</h2><p>آمار بازه‌ای Analytics در کنار آمار فعلی Data API</p></div>
+    <span class="data-chip"><i data-lucide="clock"></i> Sync: {{ analytics.fetched_at[:16].replace('T',' ') }}</span>
+  </div>
+  <div class="glass-card data-table-card">
+    <div class="responsive-table">
+      <table class="modern-table video-table">
+        <thead><tr><th>ویدیو</th><th>Views بازه</th><th>Likes</th><th>Comments</th><th>Subs Gained</th><th>Watch Time</th><th>Avg Duration</th></tr></thead>
+        <tbody>
+        {% for video in analytics.top_videos %}
+          <tr>
+            <td>
+              <a class="video-cell" href="{{ video.url }}" target="_blank" rel="noopener">
+                {% if video.thumbnail_url %}<img src="{{ video.thumbnail_url }}" alt="">{% endif %}
+                <span><strong>{{ video.title }}</strong><small>{{ video.published_at[:10] if video.published_at else video.video_id }}</small></span>
+              </a>
+            </td>
+            <td><strong>{{ compact_number(video.period_views) }}</strong><small>{{ compact_number(video.views) }} فعلی</small></td>
+            <td>{{ compact_number(video.period_likes) }}</td>
+            <td>{{ compact_number(video.period_comments) }}</td>
+            <td class="positive">+{{ compact_number(video.period_subscribers_gained) }}</td>
+            <td>{{ compact_number(video.period_watch_minutes) }}m</td>
+            <td>{{ format_duration(video.period_average_view_duration) }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7"><div class="table-empty">داده‌ای برای این بازه وجود ندارد.</div></td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section-block">
+  <div class="section-title-row"><div><span class="section-kicker">Latest Uploads</span><h2>آخرین ویدیوهای کانال</h2><p>آمار فعلی مستقیم از YouTube Data API</p></div></div>
+  <div class="video-grid">
+    {% for video in analytics.latest_videos %}
+    <a class="video-card glass-card" href="{{ video.url }}" target="_blank" rel="noopener">
+      <div class="video-thumb">{% if video.thumbnail_url %}<img src="{{ video.thumbnail_url }}" alt="">{% endif %}<span class="duration-badge">{{ format_duration(video.duration_seconds) }}</span></div>
+      <div class="video-card-body"><strong>{{ video.title }}</strong><small>{{ video.published_at[:10] }}</small><div class="video-card-stats"><span><i data-lucide="eye"></i>{{ compact_number(video.views) }}</span><span><i data-lucide="thumbs-up"></i>{{ compact_number(video.likes) }}</span><span><i data-lucide="message-square"></i>{{ compact_number(video.comments) }}</span></div></div>
+    </a>
+    {% else %}<div class="empty-state glass-card"><i data-lucide="video-off"></i><p>ویدیویی برای نمایش پیدا نشد.</p></div>{% endfor %}
+  </div>
+</section>
+
+<script id="channel-analytics-data" type="application/json">{{ analytics|tojson }}</script>
+{% endif %}
+
+<section class="section-block settings-section">
+  <div class="section-title-row"><div><span class="section-kicker">Channel Configuration</span><h2>تنظیمات انتشار</h2><p>تنظیمات مستقل این کانال برای ربات و پنل</p></div></div>
+  <div class="settings-grid">
+    <article class="glass-card settings-card">
+      <form method="post" class="form-grid one">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>نام داخلی کانال<input name="label" value="{{ channel.label }}" maxlength="120" required></label>
+        <label>هشتگ‌های پیش‌فرض<textarea name="default_hashtags" rows="4">{{ channel.default_hashtags }}</textarea></label>
+        <label>Privacy پیش‌فرض<select name="default_privacy"><option value="public" {% if channel.default_privacy=='public' %}selected{% endif %}>Public</option><option value="unlisted" {% if channel.default_privacy=='unlisted' %}selected{% endif %}>Unlisted</option><option value="private" {% if channel.default_privacy=='private' %}selected{% endif %}>Private</option></select></label>
+        <label class="switch-row"><span><strong>کانال فعال باشد</strong><small>برای ارسال محتوا از پنل و Telegram</small></span><span class="switch"><input type="checkbox" name="is_active" {% if channel.is_active %}checked{% endif %}><span></span></span></label>
+        <button class="btn btn-primary"><i data-lucide="save"></i> ذخیره تنظیمات</button>
+      </form>
+    </article>
+    <article class="glass-card api-details-card">
+      <div class="card-heading"><div><span class="section-kicker">Connection</span><h2>وضعیت API</h2></div></div>
+      <div class="api-detail-list">
+        <div><span>YouTube Channel ID</span><code>{{ channel.youtube_channel_id }}</code></div>
+        <div><span>Upload API</span><b class="positive">{{ 'Connected' if authorization.upload else 'Missing' }}</b></div>
+        <div><span>Read API</span><b class="positive">{{ 'Connected' if authorization.read else 'Missing' }}</b></div>
+        <div><span>Analytics API</span><b class="{{ 'positive' if authorization.analytics else 'warning-text' }}">{{ 'Connected' if authorization.analytics else 'Reconnect required' }}</b></div>
+        <div><span>آخرین Sync پایه</span><b>{{ channel.last_synced_at.strftime('%Y-%m-%d %H:%M') if channel.last_synced_at else '—' }}</b></div>
+      </div>
+      <form method="post" action="{{ url_for('channel_refresh', channel_id=channel.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="days" value="{{ selected_days }}">
+        <button class="btn btn-soft wide"><i data-lucide="refresh-ccw"></i> Sync اطلاعات پایه</button>
+      </form>
+    </article>
+  </div>
+
+  <article class="danger-zone glass-card">
+    <div><span class="section-kicker danger-kicker">Danger Zone</span><h3>حذف یا غیرفعال‌سازی کانال</h3><p>اگر تاریخچه انتشار وجود داشته باشد، کانال برای حفظ گزارش‌ها فقط غیرفعال می‌شود.</p></div>
+    <form method="post" action="{{ url_for('channel_delete', channel_id=channel.id) }}" onsubmit="return confirm('مطمئن هستید؟')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-danger"><i data-lucide="trash-2"></i> حذف / غیرفعال</button>
     </form>
-  </section>
-</div>
-<section class="card danger-zone"><div><h2>غیرفعال‌سازی / حذف</h2><p>اگر تاریخچه آپلود وجود داشته باشد، برای حفظ گزارش‌ها کانال فقط غیرفعال می‌شود.</p></div><form method="post" action="{{ url_for('channel_delete', channel_id=channel.id) }}" onsubmit="return confirm('مطمئن هستید؟')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn danger">حذف یا غیرفعال‌سازی</button></form></section>
+  </article>
+</section>
 {% endblock %}

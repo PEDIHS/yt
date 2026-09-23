@@ -1,18 +1,32 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import func
 
+from analytics import (
+    ALLOWED_PERIODS,
+    get_cached_analytics,
+    get_or_sync_channel_analytics,
+    normalize_period,
+    sync_channel_analytics,
+)
 from config import Config
 from db import SessionLocal, init_db
 from downloader import is_supported_instagram_url
 from jobs import create_job, enqueue_job
 from models import AuditLog, OAuthRequest, UploadJob, YouTubeChannel
 from security import credentials_match, csrf_token, login_required, require_csrf
-from youtube import connect_channel, oauth_flow, build_authorization_url, refresh_channel
+from youtube import (
+    build_authorization_url,
+    channel_authorization_state,
+    connect_channel,
+    oauth_flow,
+    refresh_channel,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 logger = logging.getLogger("panel")
@@ -30,9 +44,40 @@ app.config.update(
 init_db()
 
 
+def _compact_number(value) -> str:
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return "0"
+    absolute = abs(number)
+    for divisor, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
+        if absolute >= divisor:
+            result = number / divisor
+            return f"{result:.1f}{suffix}".replace(".0", "")
+    return f"{int(number):,}"
+
+
+def _duration(value) -> str:
+    try:
+        seconds = int(round(float(value or 0)))
+    except (TypeError, ValueError):
+        seconds = 0
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
 @app.context_processor
 def inject_globals():
-    return {"csrf_token": csrf_token, "public_base_url": Config.PUBLIC_BASE_URL}
+    return {
+        "csrf_token": csrf_token,
+        "public_base_url": Config.PUBLIC_BASE_URL,
+        "compact_number": _compact_number,
+        "format_duration": _duration,
+        "analytics_periods": sorted(ALLOWED_PERIODS),
+    }
 
 
 def _audit(actor: str, action: str, details: str = "") -> None:
@@ -43,6 +88,77 @@ def _audit(actor: str, action: str, details: str = "") -> None:
 
 def _oauth_redirect_uri() -> str:
     return f"{Config.PUBLIC_BASE_URL}/oauth/callback"
+
+
+def _dashboard_analytics(channels: list[YouTubeChannel], days: int):
+    analytics_map = {}
+    coverage = 0
+    summary = {
+        "views": 0,
+        "likes": 0,
+        "comments": 0,
+        "shares": 0,
+        "subscribers_gained": 0,
+        "subscribers_lost": 0,
+        "subscribers_net": 0,
+        "watch_minutes": 0,
+    }
+    previous_summary = {key: 0 for key in summary}
+    all_dates: set[str] = set()
+    channel_daily_maps: dict[int, dict[str, dict]] = {}
+
+    for channel in channels:
+        payload = get_cached_analytics(channel.id, days)
+        analytics_map[channel.id] = payload
+        if not payload:
+            continue
+        coverage += 1
+        row = payload.get("summary", {})
+        previous_row = payload.get("previous_summary", {})
+        for key in summary:
+            summary[key] += int(row.get(key, 0) or 0)
+            previous_summary[key] += int(previous_row.get(key, 0) or 0)
+        daily_map = {item.get("date"): item for item in payload.get("daily", []) if item.get("date")}
+        channel_daily_maps[channel.id] = daily_map
+        all_dates.update(daily_map.keys())
+
+    dates = sorted(all_dates)
+    series = []
+    for channel in channels:
+        daily_map = channel_daily_maps.get(channel.id, {})
+        if not daily_map:
+            continue
+        series.append({
+            "name": channel.label,
+            "data": [int(daily_map.get(day, {}).get("views", 0) or 0) for day in dates],
+        })
+
+    distribution = [
+        {
+            "name": channel.label,
+            "value": int((analytics_map.get(channel.id) or {}).get("summary", {}).get("views", 0) or 0),
+        }
+        for channel in channels
+        if analytics_map.get(channel.id)
+    ]
+    distribution.sort(key=lambda item: item["value"], reverse=True)
+
+    def pct(current, previous):
+        previous = float(previous or 0)
+        if previous == 0:
+            return None
+        return round(((float(current or 0) - previous) / abs(previous)) * 100, 1)
+
+    changes = {
+        "views": pct(summary["views"], previous_summary["views"]),
+        "likes": pct(summary["likes"], previous_summary["likes"]),
+        "comments": pct(summary["comments"], previous_summary["comments"]),
+        "shares": pct(summary["shares"], previous_summary["shares"]),
+        "watch_minutes": pct(summary["watch_minutes"], previous_summary["watch_minutes"]),
+        "subscribers_net_delta": summary["subscribers_net"] - previous_summary["subscribers_net"],
+    }
+
+    return analytics_map, coverage, summary, changes, {"dates": dates, "series": series}, distribution
 
 
 @app.get("/health")
@@ -75,13 +191,23 @@ def logout():
 @app.get("/")
 @login_required
 def dashboard():
+    days = normalize_period(request.args.get("days"))
     with SessionLocal() as db:
         channel_count = db.query(func.count(YouTubeChannel.id)).scalar() or 0
         active_channels = db.query(func.count(YouTubeChannel.id)).filter(YouTubeChannel.is_active.is_(True)).scalar() or 0
         completed = db.query(func.count(UploadJob.id)).filter(UploadJob.status == "completed").scalar() or 0
         failed = db.query(func.count(UploadJob.id)).filter(UploadJob.status == "failed").scalar() or 0
         channels = db.query(YouTubeChannel).order_by(YouTubeChannel.id.asc()).all()
-        recent_jobs = db.query(UploadJob).order_by(UploadJob.id.desc()).limit(10).all()
+        channel_map = {channel.id: channel for channel in channels}
+        recent_jobs = db.query(UploadJob).order_by(UploadJob.id.desc()).limit(8).all()
+
+    analytics_map, coverage, period_summary, period_changes, global_chart, distribution = _dashboard_analytics(channels, days)
+    lifetime = {
+        "views": sum(int(channel.view_count or 0) for channel in channels),
+        "subscribers": sum(int(channel.subscriber_count or 0) for channel in channels),
+        "videos": sum(int(channel.video_count or 0) for channel in channels),
+    }
+
     return render_template(
         "dashboard.html",
         channel_count=channel_count,
@@ -89,8 +215,57 @@ def dashboard():
         completed=completed,
         failed=failed,
         channels=channels,
+        channel_map=channel_map,
         recent_jobs=recent_jobs,
+        selected_days=days,
+        analytics_map=analytics_map,
+        analytics_coverage=coverage,
+        period_summary=period_summary,
+        period_changes=period_changes,
+        global_chart=global_chart,
+        distribution=distribution,
+        lifetime=lifetime,
     )
+
+
+@app.post("/analytics/sync-all")
+@login_required
+def sync_all_analytics():
+    require_csrf()
+    days = normalize_period(request.form.get("days"))
+    with SessionLocal() as db:
+        channel_ids = [
+            channel.id
+            for channel in db.query(YouTubeChannel).filter(YouTubeChannel.is_active.is_(True)).all()
+        ]
+
+    if not channel_ids:
+        flash("کانال فعالی برای همگام‌سازی وجود ندارد.", "warning")
+        return redirect(url_for("dashboard", days=days))
+
+    success = 0
+    failures = []
+    workers = min(4, len(channel_ids))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="analytics-sync") as executor:
+        futures = {executor.submit(sync_channel_analytics, channel_id, days): channel_id for channel_id in channel_ids}
+        for future in as_completed(futures):
+            channel_id = futures[future]
+            try:
+                future.result()
+                success += 1
+            except Exception as exc:
+                failures.append(f"#{channel_id}: {exc}")
+
+    _audit("panel", "analytics_sync_all", f"days={days}; success={success}; failed={len(failures)}")
+    if success:
+        flash(f"آمار {success} کانال برای {days} روز بروزرسانی شد.", "success")
+    if failures:
+        flash(
+            "بعضی کانال‌ها همگام نشدند؛ احتمالاً باید OAuth آن‌ها با دسترسی Analytics دوباره متصل شود. "
+            + " | ".join(failures[:3]),
+            "warning",
+        )
+    return redirect(url_for("dashboard", days=days))
 
 
 @app.get("/channels")
@@ -98,7 +273,21 @@ def dashboard():
 def channels():
     with SessionLocal() as db:
         rows = db.query(YouTubeChannel).order_by(YouTubeChannel.id.asc()).all()
-    return render_template("channels.html", channels=rows)
+
+    analytics_map = {channel.id: get_cached_analytics(channel.id, 28) for channel in rows}
+    authorization = {}
+    for channel in rows:
+        try:
+            authorization[channel.id] = channel_authorization_state(channel.id)
+        except Exception as exc:
+            authorization[channel.id] = {"analytics": False, "error": str(exc)}
+
+    return render_template(
+        "channels.html",
+        channels=rows,
+        analytics_map=analytics_map,
+        authorization=authorization,
+    )
 
 
 @app.post("/channels/connect")
@@ -149,9 +338,9 @@ def oauth_callback():
             session.pop("oauth_request_token", None)
             session.pop("oauth_state", None)
             return render_template("oauth_success.html", channel=channel, message=message)
-        flash(f"کانال «{channel.title}» متصل شد.", "success")
+        flash(f"کانال «{channel.title}» با دسترسی Analytics متصل شد.", "success")
         _audit("panel", "channel_connected", f"channel_id={channel.id}")
-        return redirect(url_for("channels"))
+        return redirect(url_for("channel_detail", channel_id=channel.id))
     except Exception as exc:
         logger.exception("OAuth callback failed")
         return render_template("oauth_error.html", message=str(exc)), 400
@@ -160,6 +349,7 @@ def oauth_callback():
 @app.route("/channels/<int:channel_id>", methods=["GET", "POST"])
 @login_required
 def channel_detail(channel_id: int):
+    days = normalize_period(request.args.get("days"))
     with SessionLocal() as db:
         channel = db.get(YouTubeChannel, channel_id)
         if not channel:
@@ -176,20 +366,52 @@ def channel_detail(channel_id: int):
             db.commit()
             _audit("panel", "channel_updated", f"channel_id={channel_id}")
             flash("تنظیمات کانال ذخیره شد.", "success")
-            return redirect(url_for("channel_detail", channel_id=channel_id))
-    return render_template("channel_detail.html", channel=channel)
+            return redirect(url_for("channel_detail", channel_id=channel_id, days=days))
+
+    analytics, analytics_error = get_or_sync_channel_analytics(channel_id, days, max_age_minutes=30)
+    try:
+        authorization = channel_authorization_state(channel_id)
+    except Exception as exc:
+        authorization = {"analytics": False, "error": str(exc)}
+
+    with SessionLocal() as db:
+        channel = db.get(YouTubeChannel, channel_id)
+
+    return render_template(
+        "channel_detail.html",
+        channel=channel,
+        analytics=analytics,
+        analytics_error=analytics_error,
+        authorization=authorization,
+        selected_days=days,
+    )
+
+
+@app.post("/channels/<int:channel_id>/analytics/sync")
+@login_required
+def channel_analytics_sync(channel_id: int):
+    require_csrf()
+    days = normalize_period(request.form.get("days"))
+    try:
+        sync_channel_analytics(channel_id, days)
+        _audit("panel", "channel_analytics_sync", f"channel_id={channel_id}; days={days}")
+        flash(f"Analytics کانال برای {days} روز بروزرسانی شد.", "success")
+    except Exception as exc:
+        flash(f"همگام‌سازی Analytics ناموفق بود: {exc}", "danger")
+    return redirect(url_for("channel_detail", channel_id=channel_id, days=days))
 
 
 @app.post("/channels/<int:channel_id>/refresh")
 @login_required
 def channel_refresh(channel_id: int):
     require_csrf()
+    days = normalize_period(request.form.get("days"))
     try:
         refresh_channel(channel_id)
-        flash("اطلاعات کانال از YouTube همگام شد.", "success")
+        flash("اطلاعات پایه کانال از YouTube بروزرسانی شد.", "success")
     except Exception as exc:
         flash(f"خطا در همگام‌سازی: {exc}", "danger")
-    return redirect(url_for("channel_detail", channel_id=channel_id))
+    return redirect(url_for("channel_detail", channel_id=channel_id, days=days))
 
 
 @app.post("/channels/<int:channel_id>/delete")
@@ -217,7 +439,12 @@ def channel_delete(channel_id: int):
 @login_required
 def upload():
     with SessionLocal() as db:
-        channels_list = db.query(YouTubeChannel).filter(YouTubeChannel.is_active.is_(True)).order_by(YouTubeChannel.label).all()
+        channels_list = (
+            db.query(YouTubeChannel)
+            .filter(YouTubeChannel.is_active.is_(True))
+            .order_by(YouTubeChannel.label)
+            .all()
+        )
     if request.method == "POST":
         require_csrf()
         source_url = request.form.get("source_url", "").strip()
@@ -279,6 +506,16 @@ def api_job(job_id: int):
             "created_at": job.created_at.isoformat(),
             "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         })
+
+
+@app.get("/api/channels/<int:channel_id>/analytics")
+@login_required
+def api_channel_analytics(channel_id: int):
+    days = normalize_period(request.args.get("days"))
+    payload = get_cached_analytics(channel_id, days)
+    if not payload:
+        return jsonify({"error": "analytics_not_synced", "days": days}), 404
+    return jsonify(payload)
 
 
 if __name__ == "__main__":

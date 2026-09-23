@@ -1,27 +1,89 @@
 {% extends "base.html" %}
-{% block title %}کانال‌ها | YT Manager{% endblock %}
+{% block title %}کانال‌ها | YT Studio{% endblock %}
+{% block eyebrow %}Channel Portfolio{% endblock %}
 {% block heading %}کانال‌های YouTube{% endblock %}
-{% block subheading %}اتصال چند کانال با OAuth مستقل و مدیریت جداگانه{% endblock %}
+{% block subheading %}اتصال، وضعیت OAuth و عملکرد ۲۸ روزه هر کانال{% endblock %}
+
 {% block content %}
-<section class="card connect-card">
-  <div><h2>اتصال کانال جدید</h2><p>با Google OAuth وارد شوید و حساب/Brand Channel موردنظر را انتخاب کنید.</p></div>
-  <form method="post" action="{{ url_for('channels_connect') }}" class="connect-form">
+<section class="connect-hero glass-card">
+  <div class="connect-copy">
+    <div class="hero-icon"><i data-lucide="circle-plus"></i></div>
+    <div>
+      <span class="section-kicker">Google OAuth</span>
+      <h2>اتصال کانال یا Brand Channel جدید</h2>
+      <p>هر کانال credential رمزنگاری‌شده، Analytics و تنظیمات انتشار مستقل دارد.</p>
+    </div>
+  </div>
+  <form method="post" action="{{ url_for('channels_connect') }}" class="connect-form modern-connect">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input name="label" placeholder="نام داخلی کانال؛ مثلاً کانال اصلی" maxlength="120">
-    <button class="btn primary">اتصال با Google</button>
+    <input name="label" placeholder="نام داخلی؛ مثلاً Main Shorts" maxlength="120">
+    <button class="btn btn-primary"><i data-lucide="key-round"></i> اتصال با Google</button>
   </form>
 </section>
-<section class="channel-grid">
+
+<div class="channel-portfolio-grid">
   {% for channel in channels %}
-  <article class="channel-card">
-    <div class="channel-top">
-      {% if channel.thumbnail_url %}<img src="{{ channel.thumbnail_url }}" alt="">{% else %}<div class="avatar big">YT</div>{% endif %}
-      <div class="grow"><span class="pill {{ 'success' if channel.is_active else 'muted' }}">{{ 'فعال' if channel.is_active else 'غیرفعال' }}</span><h2>{{ channel.label }}</h2><p>{{ channel.title }}</p></div>
+  {% set data = analytics_map.get(channel.id) %}
+  {% set stats = data.summary if data else None %}
+  {% set auth = authorization.get(channel.id, {}) %}
+  <article class="portfolio-card glass-card">
+    <div class="portfolio-head">
+      <div class="channel-identity">
+        {% if channel.thumbnail_url %}<img src="{{ channel.thumbnail_url }}" alt="{{ channel.title }}">{% else %}<div class="avatar avatar-lg">YT</div>{% endif %}
+        <div class="grow">
+          <div class="label-line">
+            <strong>{{ channel.label }}</strong>
+            <span class="status-dot {{ 'active' if channel.is_active else 'inactive' }}"></span>
+          </div>
+          <small>{{ channel.title }}</small>
+        </div>
+      </div>
+      <span class="scope-badge {% if auth.analytics %}ok{% else %}warn{% endif %}">
+        <i data-lucide="{% if auth.analytics %}chart-spline{% else %}triangle-alert{% endif %}"></i>
+        {{ 'Analytics Ready' if auth.analytics else 'Reconnect' }}
+      </span>
     </div>
-    <div class="stats three"><div><strong>{{ '{:,}'.format(channel.subscriber_count) }}</strong><span>مشترک</span></div><div><strong>{{ '{:,}'.format(channel.view_count) }}</strong><span>بازدید</span></div><div><strong>{{ '{:,}'.format(channel.video_count) }}</strong><span>ویدیو</span></div></div>
-    <div class="channel-meta"><span>Privacy: <b>{{ channel.default_privacy }}</b></span><span>ID: <code>#{{ channel.id }}</code></span></div>
-    <a class="btn wide" href="{{ url_for('channel_detail', channel_id=channel.id) }}">تنظیمات و مدیریت</a>
+
+    <div class="portfolio-lifetime">
+      <div><span>Subscribers</span><strong>{{ compact_number(channel.subscriber_count) }}</strong></div>
+      <div><span>Lifetime Views</span><strong>{{ compact_number(channel.view_count) }}</strong></div>
+      <div><span>Videos</span><strong>{{ compact_number(channel.video_count) }}</strong></div>
+    </div>
+
+    {% if stats %}
+    <div class="portfolio-period-head"><span>۲۸ روز اخیر</span><span>{{ data.fetched_at[:10] if data.fetched_at else '' }}</span></div>
+    <div class="portfolio-period">
+      <div><span>Views</span><strong>{{ compact_number(stats.views) }}</strong></div>
+      <div><span>Likes</span><strong>{{ compact_number(stats.likes) }}</strong></div>
+      <div><span>Comments</span><strong>{{ compact_number(stats.comments) }}</strong></div>
+      <div><span>Net Subs</span><strong class="{% if stats.subscribers_net < 0 %}negative{% endif %}">{% if stats.subscribers_net > 0 %}+{% endif %}{{ compact_number(stats.subscribers_net) }}</strong></div>
+    </div>
+    {% else %}
+    <div class="portfolio-no-data"><i data-lucide="database-zap"></i><span>Analytics هنوز Sync نشده است.</span></div>
+    {% endif %}
+
+    <div class="portfolio-footer">
+      <div class="portfolio-meta">
+        <span class="privacy-dot privacy-{{ channel.default_privacy }}"></span>
+        <span>{{ channel.default_privacy|capitalize }}</span>
+        <span class="separator">•</span>
+        <span>#{{ channel.id }}</span>
+      </div>
+      <a class="btn btn-soft" href="{{ url_for('channel_detail', channel_id=channel.id, days=28) }}"><i data-lucide="chart-no-axes-combined"></i> Analytics Studio</a>
+    </div>
   </article>
-  {% else %}<div class="empty card">هیچ کانال YouTube متصل نشده است.</div>{% endfor %}
+  {% else %}
+  <div class="empty-state glass-card full-span">
+    <i data-lucide="radio-tower"></i>
+    <h3>کانالی متصل نشده است</h3>
+    <p>از فرم بالا اولین کانال YouTube را با OAuth متصل کنید.</p>
+  </div>
+  {% endfor %}
+</div>
+
+<section class="info-strip glass-card">
+  <div><i data-lucide="shield-check"></i><span><strong>Credential مستقل</strong><small>توکن هر کانال رمزنگاری و جدا ذخیره می‌شود.</small></span></div>
+  <div><i data-lucide="line-chart"></i><span><strong>Analytics API</strong><small>Views، Likes، Comments، Watch Time و Subscriber growth.</small></span></div>
+  <div><i data-lucide="layers-3"></i><span><strong>Multi‑Channel</strong><small>آمار و تنظیمات انتشار برای هر کانال مجزا است.</small></span></div>
 </section>
 {% endblock %}
