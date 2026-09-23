@@ -13,8 +13,32 @@
     <label class="span-2">عنوان<input name="title" maxlength="255" required></label>
     <label class="span-2">توضیحات<textarea name="description" rows="5" placeholder="اختیاری"></textarea></label>
     <label class="span-2">هشتگ‌ها<textarea name="hashtags" rows="3" placeholder="خالی بگذارید تا هشتگ پیش‌فرض کانال استفاده شود"></textarea></label>
-    <div class="span-2 actions"><button class="btn primary">ثبت در صف انتشار</button><span class="hint">دانلود و آپلود در پس‌زمینه انجام می‌شود.</span></div>
+    <label>روش انتشار
+      <select name="publish_mode" id="publishMode">
+        <option value="auto">Auto — طبق تنظیم کانال</option>
+        <option value="smart">Smart Peak — بهترین Slot</option>
+        <option value="manual">زمان مشخص</option>
+        <option value="immediate">همین الان</option>
+      </select>
+    </label>
+    <label id="manualScheduleField">زمان مشخص
+      <input type="datetime-local" name="scheduled_at">
+      <span class="hint">براساس Timezone تنظیم‌شده برای کانال</span>
+    </label>
+    <div class="span-2 actions"><button class="btn primary"><i data-lucide="send"></i> ثبت محتوا</button><a class="btn btn-soft" href="{{ url_for('publishing_page') }}"><i data-lucide="sparkles"></i> صف هوشمند</a></div>
   </form>
   {% else %}<div class="empty">ابتدا از بخش «کانال‌ها» یک کانال YouTube متصل کنید.</div>{% endif %}
 </section>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const mode = document.getElementById('publishMode');
+  const field = document.getElementById('manualScheduleField');
+  if (!mode || !field) return;
+  const refresh = () => { field.style.display = mode.value === 'manual' ? 'grid' : 'none'; };
+  mode.addEventListener('change', refresh);
+  refresh();
+})();
+</script>
 {% endblock %}
