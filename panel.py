@@ -20,6 +20,7 @@ from db import SessionLocal, init_db
 from downloader import is_supported_instagram_url
 from jobs import create_job, enqueue_job
 from integrations import (
+    add_telegram_admin,
     build_instagram_cookie_blob,
     create_claim_code,
     get_secret,
@@ -292,6 +293,7 @@ def integrations_page():
     instagram = instagram_status()
     bot_configured = bool(get_secret("telegram_bot_token") or Config.TELEGRAM_BOT_TOKEN)
     bot_username = get_secret("telegram_bot_username")
+    primary_admin_id = get_secret("telegram_primary_admin_id")
     admin_count = telegram_admin_count() + len(Config.TELEGRAM_ADMIN_IDS)
     claim_code = session.pop("telegram_claim_code", None)
     return render_template(
@@ -300,6 +302,7 @@ def integrations_page():
         instagram=instagram,
         bot_configured=bot_configured,
         bot_username=bot_username,
+        primary_admin_id=primary_admin_id,
         admin_count=admin_count,
         claim_code=claim_code,
     )
@@ -310,16 +313,27 @@ def integrations_page():
 def integrations_telegram():
     require_csrf()
     token = request.form.get("bot_token", "").strip()
+    admin_raw = request.form.get("primary_admin_id", "").strip()
     try:
-        info = validate_telegram_token(token)
-        set_secret("telegram_bot_token", token)
+        current_token = get_secret("telegram_bot_token") or Config.TELEGRAM_BOT_TOKEN
+        effective_token = token or current_token
+        if not effective_token:
+            raise ValueError("Bot Token وارد نشده است")
+        info = validate_telegram_token(effective_token)
+        if token:
+            set_secret("telegram_bot_token", token)
         set_secret("telegram_bot_username", info.get("username") or "")
-        code = create_claim_code(15)
-        session["telegram_claim_code"] = code
-        _audit("panel", "telegram_bot_configured", f"bot_id={info.get('id')}")
-        flash("توکن ربات معتبر بود و ذخیره شد. کد Claim یک‌بارمصرف هم ساخته شد.", "success")
+        if not admin_raw.isdigit():
+            raise ValueError("آیدی ادمین باید فقط عدد باشد")
+        admin_id = int(admin_raw)
+        if admin_id <= 0:
+            raise ValueError("آیدی ادمین معتبر نیست")
+        add_telegram_admin(admin_id)
+        set_secret("telegram_primary_admin_id", str(admin_id))
+        _audit("panel", "telegram_bot_configured", f"bot_id={info.get('id')}; primary_admin_id={admin_id}")
+        flash(f"Telegram Bot @{info.get('username') or 'configured'} متصل شد و ادمین اصلی ثبت شد.", "success")
     except Exception as exc:
-        flash(f"توکن Telegram ذخیره نشد: {exc}", "danger")
+        flash(f"تنظیم Telegram ذخیره نشد: {exc}", "danger")
     return redirect(url_for("integrations_page"))
 
 
@@ -421,6 +435,7 @@ def channels():
         channels=rows,
         analytics_map=analytics_map,
         authorization=authorization,
+        google_status=google_oauth_status(),
     )
 
 
@@ -428,7 +443,7 @@ def channels():
 @login_required
 def channels_connect():
     require_csrf()
-    label = request.form.get("label", "").strip()[:120] or "YouTube Channel"
+    label = request.form.get("label", "").strip()[:120]
     url, state = build_authorization_url(_oauth_redirect_uri())
     session["oauth_state"] = state
     session["oauth_label"] = label
@@ -472,9 +487,19 @@ def oauth_callback():
             session.pop("oauth_request_token", None)
             session.pop("oauth_state", None)
             return render_template("oauth_success.html", channel=channel, message=message)
-        flash(f"کانال «{channel.title}» با دسترسی Analytics متصل شد.", "success")
-        _audit("panel", "channel_connected", f"channel_id={channel.id}")
-        return redirect(url_for("channel_detail", channel_id=channel.id))
+        try:
+            sync_channel_analytics(channel.id, 28)
+            flash(f"کانال «{channel.title}» متصل شد؛ پروفایل، Subscribers، Views، Videos و Analytics همگام شدند.", "success")
+            analytics_synced = True
+        except Exception as analytics_exc:
+            logger.warning("Initial analytics sync failed for channel %s: %s", channel.id, analytics_exc)
+            flash(f"کانال «{channel.title}» متصل شد و اطلاعات پروفایل دریافت شد؛ Analytics را می‌توانی بعداً Sync کنی.", "warning")
+            analytics_synced = False
+        session.pop("oauth_state", None)
+        session.pop("oauth_label", None)
+        session.pop("oauth_mode", None)
+        _audit("panel", "channel_connected", f"channel_id={channel.id}; analytics_synced={analytics_synced}")
+        return redirect(url_for("channels"))
     except Exception as exc:
         logger.exception("OAuth callback failed")
         return render_template("oauth_error.html", message=str(exc)), 400
