@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db import Base
@@ -39,6 +39,24 @@ class YouTubeChannel(Base):
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     jobs: Mapped[list["UploadJob"]] = relationship(back_populates="channel")
+    analytics_caches: Mapped[list["ChannelAnalyticsCache"]] = relationship(
+        back_populates="channel", cascade="all, delete-orphan"
+    )
+
+
+class ChannelAnalyticsCache(Base):
+    __tablename__ = "channel_analytics_cache"
+    __table_args__ = (UniqueConstraint("channel_id", "period_days", name="uq_channel_analytics_period"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("youtube_channels.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    period_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+    channel: Mapped[YouTubeChannel] = relationship(back_populates="analytics_caches")
 
 
 class UploadJob(Base):
