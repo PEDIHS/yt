@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 import yt_dlp
 
 from config import Config, DOWNLOAD_DIR
-from integrations import resolve_instagram_session
+from integrations import build_instagram_cookie_blob, resolve_instagram_cookie_blob, resolve_instagram_session
 
 logger = logging.getLogger("downloader")
 logging.getLogger("yt_dlp").setLevel(logging.WARNING)
@@ -53,9 +53,17 @@ def download_video(url: str) -> Optional[str]:
     if Config.FFMPEG_PATH:
         ydl_opts["ffmpeg_location"] = Config.FFMPEG_PATH
 
-    sessionid = resolve_instagram_session()
-    if sessionid:
-        ydl_opts["http_headers"]["Cookie"] = f"sessionid={sessionid}"
+    cookie_blob = resolve_instagram_cookie_blob()
+    if not cookie_blob:
+        sessionid = resolve_instagram_session()
+        if sessionid:
+            cookie_blob = build_instagram_cookie_blob(sessionid)
+
+    if cookie_blob:
+        cookie_path = job_dir / "instagram.cookies.txt"
+        cookie_path.write_text(cookie_blob, encoding="utf-8")
+        cookie_path.chmod(0o600)
+        ydl_opts["cookiefile"] = str(cookie_path)
 
     try:
         logger.info("Downloading Instagram media: %s", url)
