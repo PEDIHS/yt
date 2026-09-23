@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from db import SessionLocal, init_db
-from integrations import get_secret, resolve_instagram_cookie_blob, resolve_instagram_session, resolve_telegram_token
+from integrations import get_secret, resolve_instagram_cookie_blob, resolve_instagram_session, resolve_telegram_token, set_secret
 from models import InstagramDirectShare, TelegramAdmin, YouTubeChannel
 
 logger = logging.getLogger("instagram-direct")
@@ -282,7 +282,7 @@ def notify_pending_share(share_id: int) -> None:
             db.commit()
 
 
-def ingest_inbox(payload: dict) -> int:
+def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
     inbox = payload.get("inbox") or payload
     threads = inbox.get("threads", []) if isinstance(inbox, dict) else []
     created_ids: list[int] = []
@@ -313,7 +313,7 @@ def ingest_inbox(payload: dict) -> int:
                     title_hint=media["title"][:255],
                     thumbnail_url=media["thumbnail_url"],
                     raw_json=json.dumps(item, ensure_ascii=False)[:100000],
-                    status="pending_channel",
+                    status="pending_channel" if notify else "ignored_baseline",
                     detected_at=datetime.utcnow(),
                 )
                 db.add(row)
@@ -321,17 +321,24 @@ def ingest_inbox(payload: dict) -> int:
                 created_ids.append(row.id)
         db.commit()
 
-    for share_id in created_ids:
-        try:
-            notify_pending_share(share_id)
-        except Exception:
-            logger.exception("Failed to notify Telegram for Instagram share %s", share_id)
+    if notify:
+        for share_id in created_ids:
+            try:
+                notify_pending_share(share_id)
+            except Exception:
+                logger.exception("Failed to notify Telegram for Instagram share %s", share_id)
     return len(created_ids)
 
 
 def poll_once() -> int:
     payload = fetch_primary_inbox()
-    return ingest_inbox(payload)
+    bootstrapped = get_secret("instagram_direct_bootstrapped") == "1"
+    count = ingest_inbox(payload, notify=bootstrapped)
+    if not bootstrapped:
+        set_secret("instagram_direct_bootstrapped", "1")
+        logger.info("Instagram Direct baseline created with %s existing shared media items", count)
+        return 0
+    return count
 
 
 def run_watcher() -> None:
