@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db import Base
@@ -128,3 +128,42 @@ class TelegramAdmin(Base):
 
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class ChannelPublishingConfig(Base):
+    __tablename__ = "channel_publishing_configs"
+
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("youtube_channels.id", ondelete="CASCADE"), primary_key=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    smart_peak_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    videos_per_day: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Tehran", nullable=False)
+    minimum_gap_minutes: Mapped[int] = mapped_column(Integer, default=180, nullable=False)
+    allowed_start_hour: Mapped[int] = mapped_column(Integer, default=9, nullable=False)
+    allowed_end_hour: Mapped[int] = mapped_column(Integer, default=23, nullable=False)
+    manual_slots_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    peak_slots_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    peak_analysis_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    last_analyzed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class UploadSchedule(Base):
+    __tablename__ = "upload_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("upload_jobs.id", ondelete="CASCADE"), unique=True, index=True, nullable=False
+    )
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("youtube_channels.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime, index=True, nullable=False)
+    schedule_mode: Mapped[str] = mapped_column(String(24), default="smart", nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="waiting", index=True, nullable=False)
+    score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    released_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
