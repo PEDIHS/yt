@@ -6,6 +6,7 @@ from datetime import datetime
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import func
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from analytics import (
     ALLOWED_PERIODS,
@@ -43,6 +44,7 @@ logger = logging.getLogger("panel")
 Config.validate_panel()
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 app.secret_key = Config.SECRET_KEY
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
