@@ -21,6 +21,7 @@ logger = logging.getLogger("publishing")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 _scheduler_executor = ThreadPoolExecutor(max_workers=max(1, Config.MAX_WORKERS), thread_name_prefix="smart-publisher")
+_peak_analysis_inflight: set[int] = set()
 
 DEFAULT_PEAK_HOURS = [12, 15, 18, 21, 23]
 
@@ -618,14 +619,52 @@ def _process_scheduled_job(job_id: int) -> None:
     _notify_telegram_result(job_id, result)
 
 
+def _analyze_peak_background(channel_id: int) -> None:
+    try:
+        analyze_peak_slots(channel_id, 90)
+        logger.info("Peak analysis refreshed for channel %s", channel_id)
+    except Exception:
+        logger.exception("Peak analysis refresh failed for channel %s", channel_id)
+    finally:
+        _peak_analysis_inflight.discard(channel_id)
+
+
+def _refresh_peak_analysis_if_due() -> int:
+    threshold = _utcnow() - timedelta(hours=24)
+    with SessionLocal() as db:
+        rows = db.query(ChannelPublishingConfig).filter(
+            ChannelPublishingConfig.enabled.is_(True),
+            ChannelPublishingConfig.smart_peak_enabled.is_(True),
+        ).all()
+        channel_ids = [
+            row.channel_id
+            for row in rows
+            if row.channel_id not in _peak_analysis_inflight
+            and (row.last_analyzed_at is None or row.last_analyzed_at <= threshold)
+        ][:4]
+
+    for channel_id in channel_ids:
+        _peak_analysis_inflight.add(channel_id)
+        _scheduler_executor.submit(_analyze_peak_background, channel_id)
+    return len(channel_ids)
+
+
 def run_scheduler() -> None:
     init_db()
     logger.info("Smart publishing scheduler started")
+    last_analysis_scan = _utcnow() - timedelta(hours=1)
     while True:
         try:
             due_ids = _mark_due_for_release()
             for job_id in due_ids:
                 _scheduler_executor.submit(_process_scheduled_job, job_id)
+
+            now = _utcnow()
+            if now - last_analysis_scan >= timedelta(minutes=30):
+                scheduled = _refresh_peak_analysis_if_due()
+                if scheduled:
+                    logger.info("Queued %s automatic peak analyses", scheduled)
+                last_analysis_scan = now
         except Exception:
             logger.exception("Smart publishing scheduler loop failed")
         time.sleep(30)
