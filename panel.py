@@ -180,6 +180,7 @@ def dashboard():
         completed = db.query(func.count(UploadJob.id)).filter(UploadJob.status == "completed").scalar() or 0
         failed = db.query(func.count(UploadJob.id)).filter(UploadJob.status == "failed").scalar() or 0
         channels = db.query(YouTubeChannel).order_by(YouTubeChannel.id.asc()).all()
+        channel_map = {channel.id: channel for channel in channels}
         recent_jobs = db.query(UploadJob).order_by(UploadJob.id.desc()).limit(8).all()
 
     analytics_map, coverage, period_summary, global_chart, distribution = _dashboard_analytics(channels, days)
@@ -196,6 +197,7 @@ def dashboard():
         completed=completed,
         failed=failed,
         channels=channels,
+        channel_map=channel_map,
         recent_jobs=recent_jobs,
         selected_days=days,
         analytics_map=analytics_map,
