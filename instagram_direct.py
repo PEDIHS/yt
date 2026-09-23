@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import logging
+from concurrent.futures import ThreadPoolExecutor
 import re
 import time
 from datetime import datetime, timedelta
@@ -18,6 +19,7 @@ from models import InstagramDirectShare, TelegramAdmin, YouTubeChannel
 logger = logging.getLogger("instagram-direct")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 _last_disconnect_alert_at: datetime | None = None
+_ack_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="instagram-ack")
 PLAYWRIGHT_BROWSERS_PATH = os.getenv(
     "PLAYWRIGHT_BROWSERS_PATH",
     "/opt/yt.pedramhs.ir/playwright-browsers",
@@ -353,6 +355,14 @@ def send_instagram_received_ack(thread_id: str, text: str = "دریافت شد")
             browser.close()
 
 
+def _ack_share_safely(share_id: int, thread_id: str) -> None:
+    try:
+        send_instagram_received_ack(thread_id)
+        logger.info("Instagram acknowledgement sent for share %s", share_id)
+    except Exception as exc:
+        logger.warning("Instagram Direct acknowledgement failed for share %s: %s", share_id, exc)
+
+
 def notify_pending_share(share_id: int) -> None:
     token = resolve_telegram_token()
     admin_id = _primary_admin_id()
@@ -418,6 +428,13 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
                 if exists:
                     continue
                 sender_id, sender_username = _sender_for_item(thread, item)
+                recent_duplicate = db.query(InstagramDirectShare.id).filter(
+                    InstagramDirectShare.media_url == media["url"],
+                    InstagramDirectShare.sender_id == sender_id[:128],
+                    InstagramDirectShare.detected_at >= datetime.utcnow() - timedelta(minutes=10),
+                ).first()
+                if recent_duplicate:
+                    continue
                 row = InstagramDirectShare(
                     item_key=item_key[:255],
                     thread_id=thread_id[:255],
@@ -439,18 +456,16 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
 
     if notify:
         for share_id in created_ids:
-            with SessionLocal() as db:
-                share = db.get(InstagramDirectShare, share_id)
-                thread_id = share.thread_id if share else ""
-            if thread_id:
-                try:
-                    send_instagram_received_ack(thread_id)
-                except Exception as exc:
-                    logger.warning("Instagram Direct acknowledgement failed for share %s: %s", share_id, exc)
             try:
                 notify_pending_share(share_id)
             except Exception:
                 logger.exception("Failed to notify Telegram for Instagram share %s", share_id)
+
+            with SessionLocal() as db:
+                share = db.get(InstagramDirectShare, share_id)
+                thread_id = share.thread_id if share else ""
+            if thread_id:
+                _ack_executor.submit(_ack_share_safely, share_id, thread_id)
     return len(created_ids)
 
 
