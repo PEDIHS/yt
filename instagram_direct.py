@@ -324,15 +324,28 @@ def send_instagram_received_ack(thread_id: str, text: str = "دریافت شد")
             )
             context.add_cookies(cookies)
             page = context.new_page()
+
+            # Bootstrap the web session first. A valid sessionid is enough for
+            # Instagram to mint browser-only cookies (mid, ig_did, rur, etc.).
+            page.goto(
+                "https://www.instagram.com/",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            page.wait_for_timeout(2500)
+            home_url = page.url.lower()
+            if "/accounts/login" in home_url:
+                raise RuntimeError("Instagram web session is not authorized")
+
             page.goto(
                 f"https://www.instagram.com/direct/t/{thread_id}/",
                 wait_until="domcontentloaded",
                 timeout=30000,
             )
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(3500)
             current_url = page.url.lower()
-            if "/accounts/login" in current_url or current_url.rstrip("/") == "https://www.instagram.com":
-                raise RuntimeError("Instagram web session is not authorized for Direct")
+            if "/accounts/login" in current_url or "/direct/t/" not in current_url:
+                raise RuntimeError("Instagram Direct thread could not be opened")
 
             candidates = [
                 page.locator('div[contenteditable="true"][role="textbox"]'),
