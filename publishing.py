@@ -200,22 +200,51 @@ def analyze_peak_slots(channel_id: int, days: int = 90) -> dict:
 
     hour_rank = aggregate(hour_buckets)
     weekday_rank = aggregate(weekday_buckets)
-    allowed_hours = [
-        row for row in hour_rank
-        if cfg.allowed_start_hour <= row["key"] <= cfg.allowed_end_hour
-    ]
-    chosen = allowed_hours[:max(3, min(6, cfg.videos_per_day + 2))]
 
-    if len(chosen) < 3:
+    smoothed_hours = []
+    weights = {0: 1.0, 1: 0.68, 2: 0.32}
+    for hour in range(cfg.allowed_start_hour, cfg.allowed_end_hour + 1):
+        weighted_total = 0.0
+        weight_total = 0.0
+        samples = 0
+        for source_hour, values in hour_buckets.items():
+            distance = abs(hour - source_hour)
+            if distance not in weights:
+                continue
+            weight = weights[distance]
+            for value in values:
+                weighted_total += value * weight
+                weight_total += weight
+                samples += 1
+        if weight_total:
+            base_score = weighted_total / weight_total
+            reliability = 0.72 + 0.28 * min(1.0, samples / 6.0)
+            score = base_score * reliability
+        else:
+            score = 0.0
+        smoothed_hours.append({"key": hour, "samples": samples, "score": round(score, 2)})
+
+    smoothed_hours.sort(key=lambda row: (row["score"], row["samples"]), reverse=True)
+    target_slots = max(3, min(6, cfg.videos_per_day + 2))
+    gap_hours = max(1, math.ceil(cfg.minimum_gap_minutes / 60))
+    chosen = []
+    for row in smoothed_hours:
+        if any(abs(int(row["key"]) - int(existing["key"])) < gap_hours for existing in chosen):
+            continue
+        chosen.append(row)
+        if len(chosen) >= target_slots:
+            break
+
+    if len(chosen) < min(3, target_slots):
         fallback = [
             hour for hour in DEFAULT_PEAK_HOURS
             if cfg.allowed_start_hour <= hour <= cfg.allowed_end_hour
         ]
         for hour in fallback:
-            if any(row["key"] == hour for row in chosen):
+            if any(abs(hour - int(existing["key"])) < gap_hours for existing in chosen):
                 continue
             chosen.append({"key": hour, "samples": 0, "score": 0.0})
-            if len(chosen) >= max(3, min(6, cfg.videos_per_day + 2)):
+            if len(chosen) >= target_slots:
                 break
 
     peak_slots = [
@@ -231,9 +260,10 @@ def analyze_peak_slots(channel_id: int, days: int = 90) -> dict:
     top_country = ((audience.get("countries") or [{}])[0]).get("country") or ""
     top_device = ((audience.get("devices") or [{}])[0]).get("device") or ""
     confidence = "low"
-    if len(videos) >= 25:
+    strongest_samples = max([int(row.get("samples", 0)) for row in peak_slots] or [0])
+    if len(videos) >= 25 and strongest_samples >= 6:
         confidence = "high"
-    elif len(videos) >= 10:
+    elif len(videos) >= 10 and strongest_samples >= 3:
         confidence = "medium"
 
     analysis = {
