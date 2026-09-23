@@ -103,6 +103,7 @@ def _dashboard_analytics(channels: list[YouTubeChannel], days: int):
         "subscribers_net": 0,
         "watch_minutes": 0,
     }
+    previous_summary = {key: 0 for key in summary}
     all_dates: set[str] = set()
     channel_daily_maps: dict[int, dict[str, dict]] = {}
 
@@ -113,8 +114,10 @@ def _dashboard_analytics(channels: list[YouTubeChannel], days: int):
             continue
         coverage += 1
         row = payload.get("summary", {})
+        previous_row = payload.get("previous_summary", {})
         for key in summary:
             summary[key] += int(row.get(key, 0) or 0)
+            previous_summary[key] += int(previous_row.get(key, 0) or 0)
         daily_map = {item.get("date"): item for item in payload.get("daily", []) if item.get("date")}
         channel_daily_maps[channel.id] = daily_map
         all_dates.update(daily_map.keys())
@@ -140,7 +143,22 @@ def _dashboard_analytics(channels: list[YouTubeChannel], days: int):
     ]
     distribution.sort(key=lambda item: item["value"], reverse=True)
 
-    return analytics_map, coverage, summary, {"dates": dates, "series": series}, distribution
+    def pct(current, previous):
+        previous = float(previous or 0)
+        if previous == 0:
+            return None
+        return round(((float(current or 0) - previous) / abs(previous)) * 100, 1)
+
+    changes = {
+        "views": pct(summary["views"], previous_summary["views"]),
+        "likes": pct(summary["likes"], previous_summary["likes"]),
+        "comments": pct(summary["comments"], previous_summary["comments"]),
+        "shares": pct(summary["shares"], previous_summary["shares"]),
+        "watch_minutes": pct(summary["watch_minutes"], previous_summary["watch_minutes"]),
+        "subscribers_net_delta": summary["subscribers_net"] - previous_summary["subscribers_net"],
+    }
+
+    return analytics_map, coverage, summary, changes, {"dates": dates, "series": series}, distribution
 
 
 @app.get("/health")
@@ -183,7 +201,7 @@ def dashboard():
         channel_map = {channel.id: channel for channel in channels}
         recent_jobs = db.query(UploadJob).order_by(UploadJob.id.desc()).limit(8).all()
 
-    analytics_map, coverage, period_summary, global_chart, distribution = _dashboard_analytics(channels, days)
+    analytics_map, coverage, period_summary, period_changes, global_chart, distribution = _dashboard_analytics(channels, days)
     lifetime = {
         "views": sum(int(channel.view_count or 0) for channel in channels),
         "subscribers": sum(int(channel.subscriber_count or 0) for channel in channels),
@@ -203,6 +221,7 @@ def dashboard():
         analytics_map=analytics_map,
         analytics_coverage=coverage,
         period_summary=period_summary,
+        period_changes=period_changes,
         global_chart=global_chart,
         distribution=distribution,
         lifetime=lifetime,
