@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}داشبورد | YT Manager{% endblock %}
+{% block heading %}داشبورد{% endblock %}
+{% block subheading %}نمای کلی کانال‌ها و وضعیت انتشار محتوا{% endblock %}
+{% block content %}
+<section class="metrics">
+  <div class="metric"><span>کل کانال‌ها</span><strong>{{ channel_count }}</strong><small>{{ active_channels }} کانال فعال</small></div>
+  <div class="metric"><span>آپلود موفق</span><strong>{{ completed }}</strong><small>در کل تاریخچه</small></div>
+  <div class="metric"><span>ناموفق</span><strong>{{ failed }}</strong><small>نیازمند بررسی</small></div>
+  <div class="metric accent"><span>نرخ موفقیت</span><strong>{% if completed + failed %}{{ ((completed / (completed + failed)) * 100)|round|int }}٪{% else %}—{% endif %}</strong><small>آپلودهای پایان‌یافته</small></div>
+</section>
+<div class="grid two">
+  <section class="card">
+    <div class="card-head"><div><h2>کانال‌های متصل</h2><p>هر کانال تنظیمات و OAuth مستقل دارد.</p></div><a class="btn small" href="{{ url_for('channels') }}">مدیریت</a></div>
+    <div class="channel-list">
+      {% for channel in channels %}
+      <a class="channel-row" href="{{ url_for('channel_detail', channel_id=channel.id) }}">
+        {% if channel.thumbnail_url %}<img src="{{ channel.thumbnail_url }}" alt="">{% else %}<div class="avatar">YT</div>{% endif %}
+        <div class="grow"><strong>{{ channel.label }}</strong><small>{{ channel.title }}</small></div>
+        <span class="pill {{ 'success' if channel.is_active else 'muted' }}">{{ 'فعال' if channel.is_active else 'غیرفعال' }}</span>
+      </a>
+      {% else %}<div class="empty">هنوز کانالی متصل نشده است.</div>{% endfor %}
+    </div>
+  </section>
+  <section class="card">
+    <div class="card-head"><div><h2>ارسال‌های اخیر</h2><p>وضعیت آخرین Jobها در یک نگاه.</p></div><a class="btn small" href="{{ url_for('jobs') }}">همه</a></div>
+    <div class="job-list">
+      {% for job in recent_jobs %}
+      <div class="job-row"><div><strong>#{{ job.id }} · {{ job.title }}</strong><small>{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</small></div><span class="pill status-{{ job.status }}">{{ job.status }}</span></div>
+      {% else %}<div class="empty">هنوز ارسالی وجود ندارد.</div>{% endfor %}
+    </div>
+  </section>
+</div>
+<section class="cta"><div><h2>انتشار محتوای جدید</h2><p>Reel یا Post اینستاگرام را برای یک کانال مشخص آماده و ارسال کنید.</p></div><a class="btn primary" href="{{ url_for('upload') }}">ارسال محتوا</a></section>
+{% endblock %}
