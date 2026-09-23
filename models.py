@@ -113,3 +113,18 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(120), nullable=False)
     details: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class SystemSecret(Base):
+    __tablename__ = "system_secrets"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    value_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class TelegramAdmin(Base):
+    __tablename__ = "telegram_admins"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
