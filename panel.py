@@ -20,10 +20,12 @@ from db import SessionLocal, init_db
 from downloader import is_supported_instagram_url
 from jobs import create_job, enqueue_job
 from integrations import (
+    build_instagram_cookie_blob,
     create_claim_code,
     get_secret,
     google_oauth_status,
     instagram_status,
+    parse_instagram_cookie_blob,
     save_google_web_client,
     validate_instagram_session,
     set_secret,
@@ -339,13 +341,31 @@ def integrations_claim_code():
 def integrations_instagram():
     require_csrf()
     sessionid = request.form.get("sessionid", "").strip()
+    csrftoken = request.form.get("csrftoken", "").strip()
+    ds_user_id = request.form.get("ds_user_id", "").strip()
+    uploaded = request.files.get("cookies_file")
+
     try:
-        info = validate_instagram_session(sessionid)
+        if uploaded and uploaded.filename:
+            raw = uploaded.read(256 * 1024).decode("utf-8", errors="strict")
+            cookies = parse_instagram_cookie_blob(raw)
+            sessionid = cookies.get("sessionid", "")
+            csrftoken = cookies.get("csrftoken", "")
+            ds_user_id = cookies.get("ds_user_id", "")
+
+        info = validate_instagram_session(sessionid, csrftoken, ds_user_id)
+        cookie_blob = build_instagram_cookie_blob(sessionid, csrftoken, ds_user_id)
+
         set_secret("instagram_sessionid", sessionid)
+        set_secret("instagram_cookie_blob", cookie_blob)
         set_secret("instagram_username", info.get("username") or "")
         set_secret("instagram_user_id", info.get("user_id") or "")
-        _audit("panel", "instagram_connected", f"username={info.get('username') or ''}")
-        flash(f"Instagram @{info.get('username')} با موفقیت متصل شد.", "success")
+
+        _audit("panel", "instagram_connected", f"username={info.get('username') or ''}; verified={info.get('verified')}")
+        if info.get("username"):
+            flash(f"Instagram @{info.get('username')} با موفقیت متصل شد.", "success")
+        else:
+            flash("کوکی‌های Instagram ذخیره شدند. تأیید نهایی هنگام اولین دانلود Reel/Post انجام می‌شود.", "success")
     except Exception as exc:
         flash(f"اتصال Instagram ناموفق بود: {exc}", "danger")
     return redirect(url_for("integrations_page"))
@@ -356,6 +376,7 @@ def integrations_instagram():
 def integrations_instagram_disconnect():
     require_csrf()
     delete_secret("instagram_sessionid")
+    delete_secret("instagram_cookie_blob")
     delete_secret("instagram_username")
     delete_secret("instagram_user_id")
     _audit("panel", "instagram_disconnected")
