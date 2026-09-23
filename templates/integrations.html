@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Integrations | YT Studio{% endblock %}
+{% block eyebrow %}Secure Integration Center{% endblock %}
+{% block heading %}اتصال‌ها و API{% endblock %}
+{% block subheading %}Telegram Bot، Google OAuth و دسترسی‌های مدیریتی را بدون قرار دادن Secret در Git مدیریت کنید{% endblock %}
+
+{% block content %}
+<section class="integration-grid">
+  <article class="glass-card integration-card">
+    <div class="integration-head">
+      <div class="integration-icon telegram"><i data-lucide="send"></i></div>
+      <div class="grow">
+        <span class="section-kicker">Telegram</span>
+        <h2>Telegram Bot</h2>
+        <p>توکن در دیتابیس رمزنگاری می‌شود و در رابط کاربری دوباره نمایش داده نمی‌شود.</p>
+      </div>
+      <span class="scope-badge {{ 'ok' if bot_configured else 'warn' }}">
+        <i data-lucide="{{ 'circle-check' if bot_configured else 'triangle-alert' }}"></i>
+        {{ 'Connected' if bot_configured else 'Not configured' }}
+      </span>
+    </div>
+
+    {% if bot_configured %}
+    <div class="integration-status-list">
+      <div><span>Bot</span><strong>@{{ bot_username or 'configured' }}</strong></div>
+      <div><span>Admin count</span><strong>{{ admin_count }}</strong></div>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('integrations_telegram') }}" class="form-grid one integration-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Bot Token
+        <input type="password" name="bot_token" autocomplete="off" placeholder="123456789:AA..." required>
+      </label>
+      <button class="btn btn-primary"><i data-lucide="shield-check"></i> اعتبارسنجی و ذخیره امن</button>
+    </form>
+
+    {% if bot_configured %}
+    <form method="post" action="{{ url_for('integrations_claim_code') }}" class="claim-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-soft"><i data-lucide="key-round"></i> ساخت کد Claim جدید</button>
+    </form>
+    {% endif %}
+
+    {% if claim_code %}
+    <div class="claim-box">
+      <span>کد یک‌بارمصرف ۱۵ دقیقه‌ای</span>
+      <strong>{{ claim_code }}</strong>
+      <small>در Telegram برای همین ربات بفرست: <code>/claim {{ claim_code }}</code></small>
+    </div>
+    {% endif %}
+  </article>
+
+  <article class="glass-card integration-card">
+    <div class="integration-head">
+      <div class="integration-icon google"><i data-lucide="youtube"></i></div>
+      <div class="grow">
+        <span class="section-kicker">Google Cloud</span>
+        <h2>YouTube OAuth Client</h2>
+        <p>برای اتصال کانال‌ها و Analytics باید OAuth Client از نوع Web Application باشد.</p>
+      </div>
+      <span class="scope-badge {{ 'ok' if google_status.configured and google_status.redirect_ok else 'warn' }}">
+        <i data-lucide="{{ 'circle-check' if google_status.configured and google_status.redirect_ok else 'triangle-alert' }}"></i>
+        {% if google_status.configured and google_status.redirect_ok %}Ready{% elif google_status.type == 'installed' %}Desktop client{% else %}Not ready{% endif %}
+      </span>
+    </div>
+
+    <div class="redirect-box">
+      <span>Authorized redirect URI</span>
+      <code>https://yt.pedramhs.ir/oauth/callback</code>
+    </div>
+
+    {% if google_status.type == 'installed' %}
+    <div class="mini-warning"><i data-lucide="info"></i><span>فایل قبلی از نوع Desktop/Installed است و برای callback دامنه مناسب نیست.</span></div>
+    {% elif google_status.configured and not google_status.redirect_ok %}
+    <div class="mini-warning"><i data-lucide="info"></i><span>Redirect URI بالا را در Google Cloud اضافه کن و JSON جدید را دانلود کن.</span></div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('integrations_google') }}" enctype="multipart/form-data" class="form-grid one integration-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Google OAuth JSON
+        <input type="file" name="client_secret" accept=".json,application/json" required>
+      </label>
+      <button class="btn btn-primary"><i data-lucide="upload-cloud"></i> بررسی و نصب OAuth Client</button>
+    </form>
+  </article>
+</section>
+
+<section class="glass-card setup-note">
+  <div class="setup-note-icon"><i data-lucide="lock-keyhole"></i></div>
+  <div>
+    <strong>Credentialها وارد GitHub نمی‌شوند.</strong>
+    <p>Bot Token به‌صورت Fernet-encrypted در SQLite ذخیره می‌شود. Google OAuth JSON فقط روی همین سرور قرار می‌گیرد. Refresh Token کانال‌ها هم جداگانه رمزنگاری می‌شود.</p>
+  </div>
+</section>
+{% endblock %}
