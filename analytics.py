@@ -254,6 +254,26 @@ def sync_channel_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
         ).execute()
         top_rows = _rows_as_dict(top_response)
 
+        def optional_report(*, dimensions: str, metrics: str = "views,estimatedMinutesWatched", sort: str = "-views", max_results: int = 12):
+            try:
+                response = analytics_service.reports().query(
+                    **common,
+                    metrics=metrics,
+                    dimensions=dimensions,
+                    sort=sort,
+                    maxResults=max_results,
+                ).execute()
+                return _rows_as_dict(response)
+            except Exception as exc:
+                logger.info("Optional analytics report %s unavailable for channel %s: %s", dimensions, channel.id, exc)
+                return []
+
+        country_rows = optional_report(dimensions="country", max_results=10)
+        traffic_rows = optional_report(dimensions="insightTrafficSourceType", max_results=10)
+        device_rows = optional_report(dimensions="deviceType", max_results=10)
+        subscribed_rows = optional_report(dimensions="subscribedStatus", max_results=5)
+        content_type_rows = optional_report(dimensions="creatorContentType", max_results=10)
+
         latest_ids = _latest_upload_ids(data_service, uploads_playlist_id, 12)
         top_ids = [str(row.get("video") or "") for row in top_rows]
         video_details = _load_video_details(data_service, top_ids + latest_ids)
@@ -311,6 +331,48 @@ def sync_channel_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
             "top_videos": top_videos,
             "latest_videos": latest_videos,
             "current": current,
+            "audience": {
+                "countries": [
+                    {
+                        "country": str(row.get("country") or "Unknown"),
+                        "views": _safe_int(row.get("views")),
+                        "watch_minutes": _safe_int(row.get("estimatedMinutesWatched")),
+                    }
+                    for row in country_rows
+                ],
+                "traffic_sources": [
+                    {
+                        "source": str(row.get("insightTrafficSourceType") or "Unknown"),
+                        "views": _safe_int(row.get("views")),
+                        "watch_minutes": _safe_int(row.get("estimatedMinutesWatched")),
+                    }
+                    for row in traffic_rows
+                ],
+                "devices": [
+                    {
+                        "device": str(row.get("deviceType") or "Unknown"),
+                        "views": _safe_int(row.get("views")),
+                        "watch_minutes": _safe_int(row.get("estimatedMinutesWatched")),
+                    }
+                    for row in device_rows
+                ],
+                "subscribed_status": [
+                    {
+                        "status": str(row.get("subscribedStatus") or "Unknown"),
+                        "views": _safe_int(row.get("views")),
+                        "watch_minutes": _safe_int(row.get("estimatedMinutesWatched")),
+                    }
+                    for row in subscribed_rows
+                ],
+                "content_types": [
+                    {
+                        "type": str(row.get("creatorContentType") or "Unknown"),
+                        "views": _safe_int(row.get("views")),
+                        "watch_minutes": _safe_int(row.get("estimatedMinutesWatched")),
+                    }
+                    for row in content_type_rows
+                ],
+            },
         }
 
         cache = db.query(ChannelAnalyticsCache).filter_by(channel_id=channel.id, period_days=days).one_or_none()
