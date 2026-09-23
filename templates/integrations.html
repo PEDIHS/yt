@@ -2,7 +2,7 @@
 {% block title %}Integrations | YT Studio{% endblock %}
 {% block eyebrow %}Secure Integration Center{% endblock %}
 {% block heading %}اتصال‌ها و API{% endblock %}
-{% block subheading %}Telegram Bot، Google OAuth و دسترسی‌های مدیریتی را بدون قرار دادن Secret در Git مدیریت کنید{% endblock %}
+{% block subheading %}Telegram، Instagram و Google OAuth را امن و بدون قرار دادن Secret در Git مدیریت کنید{% endblock %}
 
 {% block content %}
 <section class="integration-grid">
@@ -51,6 +51,49 @@
     {% endif %}
   </article>
 
+
+  <article class="glass-card integration-card">
+    <div class="integration-head">
+      <div class="integration-icon instagram"><i data-lucide="instagram"></i></div>
+      <div class="grow">
+        <span class="section-kicker">Instagram</span>
+        <h2>Instagram Account</h2>
+        <p>Session ID برای دانلود پایدار Reel/Post و محتوایی که به لاگین نیاز دارد استفاده می‌شود.</p>
+      </div>
+      <span class="scope-badge {{ 'ok' if instagram.configured else 'warn' }}">
+        <i data-lucide="{{ 'circle-check' if instagram.configured else 'triangle-alert' }}"></i>
+        {{ 'Connected' if instagram.configured else 'Not configured' }}
+      </span>
+    </div>
+
+    {% if instagram.configured %}
+    <div class="integration-status-list">
+      <div><span>Account</span><strong>@{{ instagram.username or 'session configured' }}</strong></div>
+      <div><span>Session</span><strong>Encrypted / server only</strong></div>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('integrations_instagram') }}" class="form-grid one integration-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Instagram sessionid
+        <input type="password" name="sessionid" autocomplete="off" placeholder="sessionid cookie value" required>
+      </label>
+      <button class="btn btn-primary"><i data-lucide="shield-check"></i> تست اتصال و ذخیره امن</button>
+    </form>
+
+    {% if instagram.configured %}
+    <form method="post" action="{{ url_for('integrations_instagram_disconnect') }}" class="claim-form" onsubmit="return confirm('اتصال Instagram حذف شود؟')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-danger"><i data-lucide="unlink"></i> قطع اتصال Instagram</button>
+    </form>
+    {% endif %}
+
+    <div class="mini-warning">
+      <i data-lucide="info"></i>
+      <span>پسورد Instagram ذخیره نمی‌شود؛ فقط Session ID ذخیره می‌شود و هر زمان بخواهی می‌توانی آن را revoke یا جایگزین کنی.</span>
+    </div>
+  </article>
+
   <article class="glass-card integration-card">
     <div class="integration-head">
       <div class="integration-icon google"><i data-lucide="youtube"></i></div>
@@ -90,7 +133,7 @@
   <div class="setup-note-icon"><i data-lucide="lock-keyhole"></i></div>
   <div>
     <strong>Credentialها وارد GitHub نمی‌شوند.</strong>
-    <p>Bot Token به‌صورت Fernet-encrypted در SQLite ذخیره می‌شود. Google OAuth JSON فقط روی همین سرور قرار می‌گیرد. Refresh Token کانال‌ها هم جداگانه رمزنگاری می‌شود.</p>
+    <p>Bot Token و Instagram Session ID به‌صورت Fernet-encrypted در SQLite ذخیره می‌شوند. Google OAuth JSON فقط روی همین سرور قرار می‌گیرد و Refresh Token کانال‌ها نیز جداگانه رمزنگاری می‌شود.</p>
   </div>
 </section>
 {% endblock %}
