@@ -143,6 +143,88 @@
     });
   }
 
+  const globalAudience = readJSON("global-audience-data");
+  if (globalAudience) {
+    const pretty = value => String(value || "Unknown").replaceAll("_", " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+
+    const traffic = (globalAudience.traffic_sources || []).slice(0, 10).reverse();
+    makeChart("dashboardTrafficChart", {
+      animationDuration: 700,
+      tooltip: { ...tooltip, trigger: "axis", axisPointer: { type: "shadow" } },
+      grid: { left: 6, right: 12, top: 8, bottom: 4, containLabel: true },
+      xAxis: { type: "value", axisLabel: { ...axisLabel, formatter: compact }, splitLine },
+      yAxis: {
+        type: "category",
+        data: traffic.map(item => pretty(item.name)),
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: muted, width: 130, overflow: "truncate", fontFamily: "Vazirmatn, Inter, sans-serif" }
+      },
+      series: [{
+        type: "bar",
+        data: traffic.map(item => Number(item.value || 0)),
+        barMaxWidth: 14,
+        itemStyle: {
+          borderRadius: [0, 7, 7, 0],
+          color: new echarts.graphic.LinearGradient(1, 0, 0, 0, [
+            { offset: 0, color: "#60a5fa" },
+            { offset: 1, color: "#8b5cf6" }
+          ])
+        }
+      }]
+    });
+
+    const devices = globalAudience.devices || [];
+    makeChart("dashboardDeviceChart", {
+      animationDuration: 700,
+      color: palette,
+      tooltip: {
+        trigger: "item",
+        backgroundColor: tooltipBackground,
+        borderColor: "rgba(255,255,255,.1)",
+        textStyle: { color: text, fontFamily: "Vazirmatn, Inter, sans-serif" },
+        formatter: params => pretty(params.name) + "<br><b>" + compact(params.value) + "</b> views · " + params.percent + "%"
+      },
+      legend: { bottom: 0, left: "center", type: "scroll", textStyle: { color: muted, fontSize: 10 } },
+      series: [{
+        type: "pie",
+        radius: ["55%", "78%"],
+        center: ["50%", "43%"],
+        padAngle: 3,
+        itemStyle: { borderRadius: 7, borderColor: "#0b0e16", borderWidth: 3 },
+        label: { show: false },
+        data: devices.map(item => ({ name: pretty(item.name), value: Number(item.value || 0) }))
+      }]
+    });
+
+    const countries = (globalAudience.countries || []).slice(0, 10).reverse();
+    makeChart("dashboardCountriesChart", {
+      animationDuration: 700,
+      tooltip: { ...tooltip, trigger: "axis", axisPointer: { type: "shadow" } },
+      grid: { left: 6, right: 12, top: 8, bottom: 4, containLabel: true },
+      xAxis: { type: "value", axisLabel: { ...axisLabel, formatter: compact }, splitLine },
+      yAxis: {
+        type: "category",
+        data: countries.map(item => String(item.name || "—")),
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: muted, fontFamily: "Inter, Vazirmatn, sans-serif" }
+      },
+      series: [{
+        type: "bar",
+        data: countries.map(item => Number(item.value || 0)),
+        barMaxWidth: 14,
+        itemStyle: {
+          borderRadius: [0, 7, 7, 0],
+          color: new echarts.graphic.LinearGradient(1, 0, 0, 0, [
+            { offset: 0, color: "#22d3ee" },
+            { offset: 1, color: "#34d399" }
+          ])
+        }
+      }]
+    });
+  }
+
   const channelData = readJSON("channel-analytics-data");
   if (channelData && Array.isArray(channelData.daily)) {
     const daily = channelData.daily;
