@@ -267,7 +267,7 @@
           ])
         }
       }]
-
+    });
 
     const prettyLabel = (value) => String(value || "Unknown")
       .replaceAll("_", " ")
@@ -355,7 +355,6 @@
           ])
         }
       }]
-    });
     });
   }
 
