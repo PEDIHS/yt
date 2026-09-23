@@ -1,0 +1,9 @@
+.git
+.env
+__pycache__
+*.pyc
+data
+downloads
+client_secret.json
+*.session
+ffmpeg-*-static
