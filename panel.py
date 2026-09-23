@@ -19,6 +19,19 @@ from config import Config
 from db import SessionLocal, init_db
 from downloader import is_supported_instagram_url
 from jobs import create_job, enqueue_job
+from publishing import (
+    analyze_peak_slots,
+    cancel_scheduled_job,
+    local_datetime_to_utc,
+    publishing_config_payload,
+    queue_snapshot,
+    release_job_now,
+    reschedule_channel_queue,
+    schedule_job_manual,
+    schedule_job_smart,
+    update_publishing_config,
+    utc_to_channel_local,
+)
 from integrations import (
     add_telegram_admin,
     build_instagram_cookie_blob,
@@ -950,6 +963,134 @@ def video_caption_delete(channel_id: int, video_id: str, caption_id: str):
     return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
 
 
+@app.get("/publishing")
+@login_required
+def publishing_page():
+    with SessionLocal() as db:
+        channels_list = db.query(YouTubeChannel).order_by(YouTubeChannel.label.asc()).all()
+    configs = {}
+    for channel in channels_list:
+        try:
+            configs[channel.id] = publishing_config_payload(channel.id)
+        except Exception as exc:
+            configs[channel.id] = {"error": str(exc)}
+    queue = queue_snapshot(limit=150)
+    for item in queue:
+        try:
+            item["scheduled_local"] = utc_to_channel_local(item["channel_id"], item["scheduled_for"])
+        except Exception:
+            item["scheduled_local"] = item["scheduled_for"]
+    return render_template("publishing.html", channels=channels_list, configs=configs, queue=queue)
+
+
+@app.post("/publishing/<int:channel_id>/settings")
+@login_required
+def publishing_settings(channel_id: int):
+    require_csrf()
+    slots_raw = request.form.get("manual_slots", "")
+    try:
+        slots = [int(part.strip()) for part in slots_raw.replace(";", ",").split(",") if part.strip()]
+        update_publishing_config(
+            channel_id,
+            enabled=request.form.get("enabled") == "on",
+            smart_peak_enabled=request.form.get("smart_peak_enabled") == "on",
+            videos_per_day=int(request.form.get("videos_per_day", "2")),
+            timezone_name=request.form.get("timezone", "Asia/Tehran").strip() or "Asia/Tehran",
+            minimum_gap_minutes=int(request.form.get("minimum_gap_minutes", "180")),
+            allowed_start_hour=int(request.form.get("allowed_start_hour", "9")),
+            allowed_end_hour=int(request.form.get("allowed_end_hour", "23")),
+            manual_slots=slots,
+        )
+        if request.form.get("reschedule_waiting") == "on":
+            count = reschedule_channel_queue(channel_id)
+            flash(f"تنظیمات انتشار ذخیره شد و {count} آیتم صف دوباره زمان‌بندی شد.", "success")
+        else:
+            flash("تنظیمات انتشار هوشمند ذخیره شد.", "success")
+        _audit("panel", "publishing_settings_updated", f"channel_id={channel_id}")
+    except Exception as exc:
+        flash(f"ذخیره تنظیمات انتشار ناموفق بود: {exc}", "danger")
+    return redirect(url_for("publishing_page"))
+
+
+@app.post("/publishing/<int:channel_id>/analyze")
+@login_required
+def publishing_analyze(channel_id: int):
+    require_csrf()
+    try:
+        result = analyze_peak_slots(channel_id, 90)
+        _audit("panel", "publishing_peak_analyzed", f"channel_id={channel_id}; samples={result.get('video_samples')}")
+        flash(f"تحلیل پیک بروزرسانی شد؛ {result.get('video_samples', 0)} ویدیو بررسی شد.", "success")
+    except Exception as exc:
+        flash(f"تحلیل زمان پیک ناموفق بود: {exc}", "danger")
+    return redirect(url_for("publishing_page"))
+
+
+@app.post("/publishing/<int:channel_id>/bulk")
+@login_required
+def publishing_bulk_queue(channel_id: int):
+    require_csrf()
+    raw = request.form.get("items", "")
+    created = 0
+    errors = []
+    for index, raw_line in enumerate(raw.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "|" not in line:
+            errors.append(f"خط {index}: فرمت باید URL | Title باشد")
+            continue
+        source_url, title = [part.strip() for part in line.split("|", 1)]
+        if not is_supported_instagram_url(source_url):
+            errors.append(f"خط {index}: لینک Instagram معتبر نیست")
+            continue
+        if not title:
+            errors.append(f"خط {index}: عنوان خالی است")
+            continue
+        try:
+            job = create_job(
+                channel_id=channel_id,
+                source_url=source_url,
+                title=title,
+                source="panel-smart",
+            )
+            schedule_job_smart(job.id)
+            created += 1
+        except Exception as exc:
+            errors.append(f"خط {index}: {exc}")
+    if created:
+        flash(f"{created} ویدیو وارد صف انتشار هوشمند شد.", "success")
+    if errors:
+        flash(" | ".join(errors[:5]), "warning")
+    _audit("panel", "publishing_bulk_queued", f"channel_id={channel_id}; created={created}; errors={len(errors)}")
+    return redirect(url_for("publishing_page"))
+
+
+@app.post("/queue/<int:job_id>/publish-now")
+@login_required
+def queue_publish_now(job_id: int):
+    require_csrf()
+    try:
+        release_job_now(job_id)
+        flash(f"Job #{job_id} برای انتشار فوری آزاد شد.", "success")
+        _audit("panel", "scheduled_job_released", f"job_id={job_id}")
+    except Exception as exc:
+        flash(f"انتشار فوری ناموفق بود: {exc}", "danger")
+    return redirect(url_for("publishing_page"))
+
+
+@app.post("/queue/<int:job_id>/cancel")
+@login_required
+def queue_cancel(job_id: int):
+    require_csrf()
+    try:
+        cancel_scheduled_job(job_id)
+        flash(f"Job #{job_id} از صف حذف شد.", "success")
+        _audit("panel", "scheduled_job_cancelled", f"job_id={job_id}")
+    except Exception as exc:
+        flash(f"لغو Job ناموفق بود: {exc}", "danger")
+    return redirect(url_for("publishing_page"))
+
+
 @app.route("/upload", methods=["GET", "POST"])
 @login_required
 def upload():
@@ -984,9 +1125,28 @@ def upload():
                     privacy=request.form.get("privacy") or None,
                     source="panel",
                 )
+                publish_mode = request.form.get("publish_mode", "auto")
+                if publish_mode == "auto":
+                    cfg = publishing_config_payload(channel_id)
+                    publish_mode = "smart" if cfg.get("enabled") else "immediate"
+
+                if publish_mode == "smart":
+                    schedule = schedule_job_smart(job.id)
+                    local_time = utc_to_channel_local(channel_id, schedule.scheduled_for)
+                    flash(f"Job #{job.id} برای {local_time.strftime('%Y-%m-%d %H:%M')} وارد صف هوشمند شد.", "success")
+                    _audit("panel", "upload_smart_scheduled", f"job_id={job.id}; channel_id={channel_id}")
+                    return redirect(url_for("publishing_page"))
+                if publish_mode == "manual":
+                    scheduled_utc = local_datetime_to_utc(channel_id, request.form.get("scheduled_at", ""))
+                    schedule = schedule_job_manual(job.id, scheduled_utc)
+                    local_time = utc_to_channel_local(channel_id, schedule.scheduled_for)
+                    flash(f"Job #{job.id} برای {local_time.strftime('%Y-%m-%d %H:%M')} زمان‌بندی شد.", "success")
+                    _audit("panel", "upload_manual_scheduled", f"job_id={job.id}; channel_id={channel_id}")
+                    return redirect(url_for("publishing_page"))
+
                 enqueue_job(job.id)
                 _audit("panel", "upload_queued", f"job_id={job.id}; channel_id={channel_id}")
-                flash(f"Job #{job.id} وارد صف شد.", "success")
+                flash(f"Job #{job.id} وارد صف انتشار فوری شد.", "success")
                 return redirect(url_for("jobs"))
             except Exception as exc:
                 flash(f"ثبت ارسال ناموفق بود: {exc}", "danger")
@@ -999,7 +1159,7 @@ def jobs():
     status = request.args.get("status", "").strip()
     with SessionLocal() as db:
         query = db.query(UploadJob)
-        if status in {"queued", "downloading", "uploading", "completed", "failed"}:
+        if status in {"queued", "scheduled", "cancelled", "downloading", "uploading", "completed", "failed"}:
             query = query.filter(UploadJob.status == status)
         rows = query.order_by(UploadJob.id.desc()).limit(Config.MAX_UPLOAD_HISTORY).all()
         channel_map = {c.id: c for c in db.query(YouTubeChannel).all()}
