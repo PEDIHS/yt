@@ -63,24 +63,33 @@
   <article class="kpi-card glass-card tone-cyan">
     <div class="kpi-head"><span>Views در بازه</span><span class="kpi-icon"><i data-lucide="activity"></i></span></div>
     <strong>{{ compact_number(period_summary.views) }}</strong>
-    <small>{{ selected_days }} روز اخیر</small>
+    <small>
+      {% if period_changes.views is not none %}<span class="trend-chip {{ 'up' if period_changes.views >= 0 else 'down' }}">{{ '+' if period_changes.views > 0 else '' }}{{ period_changes.views }}٪</span>{% endif %}
+      نسبت به بازه قبل
+    </small>
   </article>
   <article class="kpi-card glass-card tone-pink">
     <div class="kpi-head"><span>Likes</span><span class="kpi-icon"><i data-lucide="thumbs-up"></i></span></div>
     <strong>{{ compact_number(period_summary.likes) }}</strong>
-    <small>{{ compact_number(period_summary.comments) }} کامنت · {{ compact_number(period_summary.shares) }} اشتراک</small>
+    <small>
+      {% if period_changes.likes is not none %}<span class="trend-chip {{ 'up' if period_changes.likes >= 0 else 'down' }}">{{ '+' if period_changes.likes > 0 else '' }}{{ period_changes.likes }}٪</span>{% endif %}
+      {{ compact_number(period_summary.comments) }} کامنت · {{ compact_number(period_summary.shares) }} اشتراک
+    </small>
   </article>
   <article class="kpi-card glass-card tone-green">
     <div class="kpi-head"><span>رشد سابسکرایبر</span><span class="kpi-icon"><i data-lucide="user-plus"></i></span></div>
     <strong class="{% if period_summary.subscribers_net < 0 %}negative{% endif %}">
       {% if period_summary.subscribers_net > 0 %}+{% endif %}{{ compact_number(period_summary.subscribers_net) }}
     </strong>
-    <small>+{{ compact_number(period_summary.subscribers_gained) }} / -{{ compact_number(period_summary.subscribers_lost) }}</small>
+    <small><span class="trend-chip {{ 'up' if period_changes.subscribers_net_delta >= 0 else 'down' }}">{{ '+' if period_changes.subscribers_net_delta > 0 else '' }}{{ compact_number(period_changes.subscribers_net_delta) }}</span> نسبت به بازه قبل</small>
   </article>
   <article class="kpi-card glass-card tone-amber">
     <div class="kpi-head"><span>Watch Time</span><span class="kpi-icon"><i data-lucide="clock-3"></i></span></div>
     <strong>{{ compact_number(period_summary.watch_minutes) }}</strong>
-    <small>دقیقه تماشا در بازه</small>
+    <small>
+      {% if period_changes.watch_minutes is not none %}<span class="trend-chip {{ 'up' if period_changes.watch_minutes >= 0 else 'down' }}">{{ '+' if period_changes.watch_minutes > 0 else '' }}{{ period_changes.watch_minutes }}٪</span>{% endif %}
+      دقیقه تماشا
+    </small>
   </article>
   <article class="kpi-card glass-card tone-slate">
     <div class="kpi-head"><span>وضعیت انتشار</span><span class="kpi-icon"><i data-lucide="circle-check-big"></i></span></div>
@@ -144,7 +153,7 @@
 
       {% if stats %}
       <div class="performance-period">
-        <div><span>Views</span><strong>{{ compact_number(stats.views) }}</strong></div>
+        <div><span>Views</span><strong>{{ compact_number(stats.views) }}</strong>{% if data.changes and data.changes.views is not none %}<small class="mini-trend {{ 'up' if data.changes.views >= 0 else 'down' }}">{{ '+' if data.changes.views > 0 else '' }}{{ data.changes.views }}٪</small>{% endif %}</div>
         <div><span>Likes</span><strong>{{ compact_number(stats.likes) }}</strong></div>
         <div><span>Comments</span><strong>{{ compact_number(stats.comments) }}</strong></div>
         <div><span>Net Subs</span><strong class="{% if stats.subscribers_net < 0 %}negative{% endif %}">{% if stats.subscribers_net > 0 %}+{% endif %}{{ compact_number(stats.subscribers_net) }}</strong></div>
