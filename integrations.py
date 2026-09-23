@@ -44,7 +44,13 @@ def delete_secret(key: str) -> None:
 
 
 def resolve_telegram_token() -> str:
-    return Config.TELEGRAM_BOT_TOKEN or get_secret("telegram_bot_token")
+    if Config.TELEGRAM_BOT_TOKEN:
+        return Config.TELEGRAM_BOT_TOKEN
+    if Config.TELEGRAM_BOT_TOKEN_FILE:
+        path = Path(Config.TELEGRAM_BOT_TOKEN_FILE)
+        if path.is_file():
+            return path.read_text(encoding="utf-8").strip()
+    return get_secret("telegram_bot_token")
 
 
 def telegram_admin_count() -> int:
