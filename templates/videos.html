@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}مدیریت ویدیوها | YT Studio{% endblock %}
+{% block eyebrow %}Content Operations{% endblock %}
+{% block heading %}مدیریت حرفه‌ای ویدیوها{% endblock %}
+{% block subheading %}ویرایش، حذف، Thumbnail، Playlist و عملیات محتوای همه کانال‌ها{% endblock %}
+
+{% block content %}
+<section class="content-manager-hero glass-card">
+  <div class="content-manager-copy">
+    <div class="content-manager-icon"><i data-lucide="clapperboard"></i></div>
+    <div>
+      <span class="section-kicker">YOUTUBE CONTENT MANAGER</span>
+      <h2>کنترل کامل محتوای کانال</h2>
+      <p>ویدیوها را از یک داشبورد مدیریت کن؛ Metadata، Privacy، Thumbnail، Playlist، Comments و Captionها مستقیماً با YouTube API همگام می‌شوند.</p>
+    </div>
+  </div>
+  {% if selected_channel %}
+  <form method="get" class="channel-picker">
+    <label>کانال فعال
+      <select name="channel_id" onchange="this.form.submit()">
+        {% for channel in channels %}
+        <option value="{{ channel.id }}" {% if channel.id == selected_channel.id %}selected{% endif %}>{{ channel.title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+  {% endif %}
+</section>
+
+{% if selected_channel %}
+<section class="manager-status-strip">
+  <div class="manager-channel-card glass-card">
+    {% if selected_channel.thumbnail_url %}<img src="{{ selected_channel.thumbnail_url }}" alt="{{ selected_channel.title }}">{% else %}<div class="avatar avatar-lg">YT</div>{% endif %}
+    <div class="grow">
+      <span class="section-kicker">SELECTED CHANNEL</span>
+      <strong>{{ selected_channel.title }}</strong>
+      <small>{{ selected_channel.custom_url or selected_channel.youtube_channel_id }}</small>
+    </div>
+    <span class="scope-badge {{ 'ok' if authorization.manage and authorization.force_ssl else 'warn' }}">
+      <i data-lucide="{{ 'shield-check' if authorization.manage and authorization.force_ssl else 'triangle-alert' }}"></i>
+      {{ 'Full Manager' if authorization.manage and authorization.force_ssl else 'Reconnect Required' }}
+    </span>
+  </div>
+  <div class="manager-actions-card glass-card">
+    <a class="btn btn-primary" href="{{ url_for('upload') }}"><i data-lucide="upload-cloud"></i> انتشار جدید</a>
+    <a class="btn btn-soft" href="{{ url_for('channel_detail', channel_id=selected_channel.id) }}"><i data-lucide="chart-no-axes-combined"></i> Analytics</a>
+    {% if not authorization.manage or not authorization.force_ssl %}
+    <form method="post" action="{{ url_for('channels_connect') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="label" value="{{ selected_channel.label }}">
+      <button class="btn btn-warning"><i data-lucide="key-round"></i> Reconnect دسترسی مدیریت</button>
+    </form>
+    {% endif %}
+  </div>
+</section>
+
+{% if manager_error %}
+<section class="notice-card danger-notice">
+  <div class="notice-icon"><i data-lucide="triangle-alert"></i></div>
+  <div class="grow"><strong>دریافت Content Manager ناموفق بود</strong><p>{{ manager_error }}</p></div>
+</section>
+{% endif %}
+
+<div class="manager-layout">
+  <main>
+    <div class="yt-section-heading">
+      <div><span class="section-kicker">VIDEO LIBRARY</span><h2>ویدیوهای کانال</h2><p>جدیدترین ویدیوها با وضعیت انتشار و آمار پایه.</p></div>
+      <span class="data-chip"><i data-lucide="video"></i>{{ videos|length }} در این صفحه</span>
+    </div>
+
+    <div class="video-manager-grid">
+      {% for video in videos %}
+      <article class="video-manager-card glass-card">
+        <a class="video-manager-thumb" href="{{ url_for('video_detail', channel_id=selected_channel.id, video_id=video.video_id) }}">
+          {% if video.thumbnail_url %}<img src="{{ video.thumbnail_url }}" alt="{{ video.title }}">{% endif %}
+          <span class="video-duration">{{ duration(video.duration_seconds) }}</span>
+          <span class="video-privacy privacy-{{ video.privacy }}">{{ video.privacy }}</span>
+        </a>
+        <div class="video-manager-body">
+          <span class="section-kicker">{{ video.published_at[:10] if video.published_at else 'YouTube Video' }}</span>
+          <h3>{{ video.title }}</h3>
+          <div class="video-manager-stats">
+            <span><i data-lucide="eye"></i>{{ compact_number(video.views) }}</span>
+            <span><i data-lucide="thumbs-up"></i>{{ compact_number(video.likes) }}</span>
+            <span><i data-lucide="message-circle"></i>{{ compact_number(video.comments) }}</span>
+          </div>
+          <div class="video-manager-actions">
+            <a class="btn btn-primary" href="{{ url_for('video_detail', channel_id=selected_channel.id, video_id=video.video_id) }}"><i data-lucide="sliders-horizontal"></i> مدیریت</a>
+            <a class="icon-btn" href="{{ video.url }}" target="_blank" rel="noopener" title="نمایش در YouTube"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+      </article>
+      {% else %}
+      <div class="empty-state glass-card full-span">
+        <i data-lucide="video-off"></i><h3>ویدیویی پیدا نشد</h3><p>اگر کانال ویدیو دارد، دسترسی OAuth را Reconnect کن.</p>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if next_page_token %}
+    <div class="manager-pagination">
+      <a class="btn btn-soft" href="{{ url_for('videos_manager', channel_id=selected_channel.id, page_token=next_page_token) }}"><i data-lucide="chevron-left"></i> ویدیوهای قدیمی‌تر</a>
+    </div>
+    {% endif %}
+  </main>
+
+  <aside class="playlist-manager glass-card">
+    <div class="card-heading">
+      <div><span class="section-kicker">PLAYLIST MANAGER</span><h2>Playlistها</h2><p>ساخت، ویرایش و حذف Playlist.</p></div>
+      <span class="data-chip">{{ playlists|length }}</span>
+    </div>
+
+    <details class="manager-create-panel" {% if not playlists %}open{% endif %}>
+      <summary class="btn btn-primary"><i data-lucide="list-plus"></i> Playlist جدید</summary>
+      <form method="post" action="{{ url_for('playlist_create', channel_id=selected_channel.id) }}" class="form-grid one">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>عنوان<input name="title" maxlength="150" required></label>
+        <label>توضیحات<textarea name="description" rows="3"></textarea></label>
+        <label>Privacy
+          <select name="privacy"><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select>
+        </label>
+        <button class="btn btn-primary"><i data-lucide="plus"></i> ساخت Playlist</button>
+      </form>
+    </details>
+
+    <div class="playlist-list">
+      {% for playlist in playlists %}
+      <details class="playlist-item">
+        <summary>
+          {% if playlist.thumbnail_url %}<img src="{{ playlist.thumbnail_url }}" alt="{{ playlist.title }}">{% else %}<span class="playlist-placeholder"><i data-lucide="list-video"></i></span>{% endif %}
+          <span class="grow"><strong>{{ playlist.title }}</strong><small>{{ playlist.item_count }} ویدیو · {{ playlist.privacy }}</small></span>
+          <i data-lucide="chevron-down"></i>
+        </summary>
+        <form method="post" action="{{ url_for('playlist_edit', channel_id=selected_channel.id, playlist_id=playlist.playlist_id) }}" class="form-grid one playlist-edit-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label>عنوان<input name="title" value="{{ playlist.title }}" maxlength="150" required></label>
+          <label>توضیحات<textarea name="description" rows="3">{{ playlist.description }}</textarea></label>
+          <label>Privacy
+            <select name="privacy">
+              {% for p in ['private','unlisted','public'] %}<option value="{{ p }}" {% if playlist.privacy == p %}selected{% endif %}>{{ p|capitalize }}</option>{% endfor %}
+            </select>
+          </label>
+          <button class="btn btn-soft"><i data-lucide="save"></i> ذخیره</button>
+        </form>
+        <form method="post" action="{{ url_for('playlist_delete', channel_id=selected_channel.id, playlist_id=playlist.playlist_id) }}" onsubmit="return confirm('Playlist حذف شود؟ خود ویدیوها حذف نمی‌شوند.')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-danger"><i data-lucide="trash-2"></i> حذف Playlist</button>
+        </form>
+      </details>
+      {% else %}
+      <div class="playlist-empty"><i data-lucide="list-video"></i><span>Playlist سفارشی وجود ندارد.</span></div>
+      {% endfor %}
+    </div>
+  </aside>
+</div>
+{% else %}
+<div class="empty-state glass-card">
+  <i data-lucide="radio-tower"></i><h3>کانالی متصل نیست</h3><p>اول کانال YouTube را متصل کن تا Content Manager فعال شود.</p><a class="btn btn-primary" href="{{ url_for('channels') }}">اتصال کانال</a>
+</div>
+{% endif %}
+{% endblock %}
