@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import logging
 import re
 import time
 from datetime import datetime
 from typing import Any
+from pathlib import Path
 
 import httpx
 
@@ -14,6 +16,11 @@ from integrations import get_secret, resolve_instagram_cookie_blob, resolve_inst
 from models import InstagramDirectShare, TelegramAdmin, YouTubeChannel
 
 logger = logging.getLogger("instagram-direct")
+PLAYWRIGHT_BROWSERS_PATH = os.getenv(
+    "PLAYWRIGHT_BROWSERS_PATH",
+    "/opt/yt.pedramhs.ir/playwright-browsers",
+)
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", PLAYWRIGHT_BROWSERS_PATH)
 
 POLL_SECONDS = 30
 INBOX_URLS = (
@@ -237,6 +244,113 @@ def _channel_buttons(share_id: int) -> list[list[dict]]:
         return rows
 
 
+def _playwright_cookie_list() -> list[dict]:
+    raw = resolve_instagram_cookie_blob() or ""
+    cookies = []
+    for raw_line in raw.splitlines():
+        line = raw_line.rstrip("\r\n")
+        if not line.strip():
+            continue
+        http_only = False
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_"):]
+            http_only = True
+        elif line.lstrip().startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 7:
+            continue
+        domain, _include_subdomains, path, secure, expires, name, value = parts[:7]
+        if "instagram.com" not in domain.lower() or not name or not value:
+            continue
+        item = {
+            "name": name,
+            "value": value,
+            "domain": domain if domain.startswith(".") else f".{domain}",
+            "path": path or "/",
+            "secure": str(secure).upper() == "TRUE",
+            "httpOnly": http_only,
+            "sameSite": "Lax",
+        }
+        try:
+            expiry = int(expires or "0")
+            if expiry > 0:
+                item["expires"] = expiry
+        except ValueError:
+            pass
+        cookies.append(item)
+    if not any(item.get("name") == "sessionid" for item in cookies):
+        sessionid = resolve_instagram_session()
+        if sessionid:
+            cookies.append({
+                "name": "sessionid",
+                "value": sessionid,
+                "domain": ".instagram.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": True,
+                "sameSite": "Lax",
+            })
+    return cookies
+
+
+def send_instagram_received_ack(thread_id: str, text: str = "دریافت شد") -> None:
+    thread_id = str(thread_id or "").strip()
+    if not thread_id:
+        raise ValueError("Instagram thread id is missing")
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise RuntimeError("Playwright is not installed") from exc
+
+    cookies = _playwright_cookie_list()
+    if not any(item.get("name") == "sessionid" for item in cookies):
+        raise RuntimeError("Instagram session is not configured")
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+        try:
+            context = browser.new_context(
+                locale="fa-IR",
+                viewport={"width": 1280, "height": 900},
+            )
+            context.add_cookies(cookies)
+            page = context.new_page()
+            page.goto(
+                f"https://www.instagram.com/direct/t/{thread_id}/",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            page.wait_for_timeout(4000)
+            current_url = page.url.lower()
+            if "/accounts/login" in current_url or current_url.rstrip("/") == "https://www.instagram.com":
+                raise RuntimeError("Instagram web session is not authorized for Direct")
+
+            candidates = [
+                page.locator('div[contenteditable="true"][role="textbox"]'),
+                page.locator('textarea[placeholder]'),
+                page.locator('[contenteditable="true"]'),
+            ]
+            textbox = None
+            for locator in candidates:
+                if locator.count():
+                    textbox = locator.last
+                    break
+            if textbox is None:
+                raise RuntimeError("Instagram Direct message box was not found")
+
+            textbox.click(timeout=5000)
+            textbox.fill(text)
+            textbox.press("Enter")
+            page.wait_for_timeout(1200)
+        finally:
+            browser.close()
+
+
 def notify_pending_share(share_id: int) -> None:
     token = resolve_telegram_token()
     admin_id = _primary_admin_id()
@@ -289,7 +403,7 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
 
     with SessionLocal() as db:
         for thread in threads:
-            thread_id = str(thread.get("thread_id") or thread.get("thread_v2_id") or "")
+            thread_id = str(thread.get("thread_v2_id") or thread.get("thread_id") or "")
             items = thread.get("items", []) or []
             for item in items:
                 media = extract_shared_media(item)
@@ -323,6 +437,14 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
 
     if notify:
         for share_id in created_ids:
+            with SessionLocal() as db:
+                share = db.get(InstagramDirectShare, share_id)
+                thread_id = share.thread_id if share else ""
+            if thread_id:
+                try:
+                    send_instagram_received_ack(thread_id)
+                except Exception as exc:
+                    logger.warning("Instagram Direct acknowledgement failed for share %s: %s", share_id, exc)
             try:
                 notify_pending_share(share_id)
             except Exception:
