@@ -14,6 +14,7 @@ from integrations import get_secret, resolve_instagram_cookie_blob, resolve_inst
 from models import InstagramDirectShare, TelegramAdmin, YouTubeChannel
 
 logger = logging.getLogger("instagram-direct")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 POLL_SECONDS = 30
 INBOX_URLS = (
