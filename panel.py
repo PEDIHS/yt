@@ -140,6 +140,13 @@ def _dashboard_analytics(channels: list[YouTubeChannel], days: int):
     previous_summary = {key: 0 for key in summary}
     all_dates: set[str] = set()
     channel_daily_maps: dict[int, dict[str, dict]] = {}
+    audience_totals = {
+        "countries": {},
+        "traffic_sources": {},
+        "devices": {},
+        "subscribed_status": {},
+        "content_types": {},
+    }
 
     for channel in channels:
         payload = get_cached_analytics(channel.id, days)
@@ -155,6 +162,19 @@ def _dashboard_analytics(channels: list[YouTubeChannel], days: int):
         daily_map = {item.get("date"): item for item in payload.get("daily", []) if item.get("date")}
         channel_daily_maps[channel.id] = daily_map
         all_dates.update(daily_map.keys())
+
+        audience = payload.get("audience", {}) or {}
+        audience_fields = {
+            "countries": ("country", "views"),
+            "traffic_sources": ("source", "views"),
+            "devices": ("device", "views"),
+            "subscribed_status": ("status", "views"),
+            "content_types": ("type", "views"),
+        }
+        for group, (name_key, value_key) in audience_fields.items():
+            for item in audience.get(group, []) or []:
+                name = str(item.get(name_key) or "Unknown")
+                audience_totals[group][name] = audience_totals[group].get(name, 0) + int(item.get(value_key, 0) or 0)
 
     dates = sorted(all_dates)
     series = []
@@ -192,7 +212,12 @@ def _dashboard_analytics(channels: list[YouTubeChannel], days: int):
         "subscribers_net_delta": summary["subscribers_net"] - previous_summary["subscribers_net"],
     }
 
-    return analytics_map, coverage, summary, changes, {"dates": dates, "series": series}, distribution
+    audience_rollup = {}
+    for group, values in audience_totals.items():
+        ranked = sorted(values.items(), key=lambda item: item[1], reverse=True)
+        audience_rollup[group] = [{"name": name, "value": value} for name, value in ranked[:10]]
+
+    return analytics_map, coverage, summary, changes, {"dates": dates, "series": series}, distribution, audience_rollup
 
 
 @app.get("/health")
@@ -235,7 +260,7 @@ def dashboard():
         channel_map = {channel.id: channel for channel in channels}
         recent_jobs = db.query(UploadJob).order_by(UploadJob.id.desc()).limit(8).all()
 
-    analytics_map, coverage, period_summary, period_changes, global_chart, distribution = _dashboard_analytics(channels, days)
+    analytics_map, coverage, period_summary, period_changes, global_chart, distribution, audience_rollup = _dashboard_analytics(channels, days)
     lifetime = {
         "views": sum(int(channel.view_count or 0) for channel in channels),
         "subscribers": sum(int(channel.subscriber_count or 0) for channel in channels),
@@ -258,6 +283,7 @@ def dashboard():
         period_changes=period_changes,
         global_chart=global_chart,
         distribution=distribution,
+        audience_rollup=audience_rollup,
         lifetime=lifetime,
     )
 
