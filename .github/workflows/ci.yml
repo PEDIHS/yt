@@ -22,7 +22,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Compile Python sources
-        run: python -m compileall -q config.py db.py models.py security.py downloader.py youtube.py analytics.py jobs.py main.py panel.py tests
+        run: python -m compileall -q config.py db.py models.py security.py downloader.py youtube.py analytics.py integrations.py jobs.py main.py panel.py tests
 
       - name: Import core modules
         env:
@@ -30,7 +30,7 @@ jobs:
           PANEL_PASSWORD: ci-password
           TELEGRAM_BOT_TOKEN: 123456:ci
           TELEGRAM_ADMIN_IDS: 1
-        run: python -c "import config, db, models, security, downloader, youtube, analytics, jobs"
+        run: python -c "import config, db, models, security, downloader, youtube, analytics, integrations, jobs"
 
       - name: Run analytics unit tests
         env:

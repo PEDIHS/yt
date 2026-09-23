@@ -18,6 +18,15 @@ from config import Config
 from db import SessionLocal, init_db
 from downloader import is_supported_instagram_url
 from jobs import create_job, enqueue_job
+from integrations import (
+    create_claim_code,
+    get_secret,
+    google_oauth_status,
+    save_google_web_client,
+    set_secret,
+    telegram_admin_count,
+    validate_telegram_token,
+)
 from models import AuditLog, OAuthRequest, UploadJob, YouTubeChannel
 from security import credentials_match, csrf_token, login_required, require_csrf
 from youtube import (
@@ -266,6 +275,74 @@ def sync_all_analytics():
             "warning",
         )
     return redirect(url_for("dashboard", days=days))
+
+
+
+@app.get("/integrations")
+@login_required
+def integrations_page():
+    google_status = google_oauth_status()
+    bot_configured = bool(get_secret("telegram_bot_token") or Config.TELEGRAM_BOT_TOKEN)
+    bot_username = get_secret("telegram_bot_username")
+    admin_count = telegram_admin_count() + len(Config.TELEGRAM_ADMIN_IDS)
+    claim_code = session.pop("telegram_claim_code", None)
+    return render_template(
+        "integrations.html",
+        google_status=google_status,
+        bot_configured=bot_configured,
+        bot_username=bot_username,
+        admin_count=admin_count,
+        claim_code=claim_code,
+    )
+
+
+@app.post("/integrations/telegram")
+@login_required
+def integrations_telegram():
+    require_csrf()
+    token = request.form.get("bot_token", "").strip()
+    try:
+        info = validate_telegram_token(token)
+        set_secret("telegram_bot_token", token)
+        set_secret("telegram_bot_username", info.get("username") or "")
+        code = create_claim_code(15)
+        session["telegram_claim_code"] = code
+        _audit("panel", "telegram_bot_configured", f"bot_id={info.get('id')}")
+        flash("توکن ربات معتبر بود و ذخیره شد. کد Claim یک‌بارمصرف هم ساخته شد.", "success")
+    except Exception as exc:
+        flash(f"توکن Telegram ذخیره نشد: {exc}", "danger")
+    return redirect(url_for("integrations_page"))
+
+
+@app.post("/integrations/telegram/claim-code")
+@login_required
+def integrations_claim_code():
+    require_csrf()
+    if not (get_secret("telegram_bot_token") or Config.TELEGRAM_BOT_TOKEN):
+        flash("ابتدا Bot Token را ذخیره کن.", "warning")
+        return redirect(url_for("integrations_page"))
+    code = create_claim_code(15)
+    session["telegram_claim_code"] = code
+    _audit("panel", "telegram_claim_code_created")
+    return redirect(url_for("integrations_page"))
+
+
+@app.post("/integrations/google")
+@login_required
+def integrations_google():
+    require_csrf()
+    uploaded = request.files.get("client_secret")
+    if not uploaded or not uploaded.filename:
+        flash("فایل JSON انتخاب نشده است.", "warning")
+        return redirect(url_for("integrations_page"))
+    raw = uploaded.read(256 * 1024)
+    try:
+        save_google_web_client(raw)
+        _audit("panel", "google_oauth_client_updated")
+        flash("Google Web OAuth Client ذخیره شد و Redirect URI معتبر است.", "success")
+    except Exception as exc:
+        flash(f"Google OAuth ذخیره نشد: {exc}", "danger")
+    return redirect(url_for("integrations_page"))
 
 
 @app.get("/channels")
