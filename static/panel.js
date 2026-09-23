@@ -34,7 +34,7 @@
     backgroundColor: tooltipBackground,
     borderColor: "rgba(255,255,255,.1)",
     borderWidth: 1,
-    textStyle: { color: text, fontFamily: "Tahoma, Arial, sans-serif" },
+    textStyle: { color: text, fontFamily: "Vazirmatn, Inter, Tahoma, sans-serif" },
     extraCssText: "box-shadow:0 18px 55px rgba(0,0,0,.38);backdrop-filter:blur(18px);border-radius:12px;padding:10px 12px;"
   };
 
