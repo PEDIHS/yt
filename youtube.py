@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
+import secrets
 from datetime import datetime
 from typing import Optional
 
@@ -29,20 +33,38 @@ SCOPES = [
 ]
 
 
+def _pkce_code_verifier(state: str) -> str:
+    digest = hmac.new(
+        Config.SECRET_KEY.encode("utf-8"),
+        state.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
 def oauth_flow(redirect_uri: str, state: Optional[str] = None) -> Flow:
-    flow = Flow.from_client_secrets_file(Config.CLIENT_SECRET_FILE, scopes=SCOPES, state=state)
+    kwargs = {"autogenerate_code_verifier": False}
+    if state:
+        kwargs["state"] = state
+        kwargs["code_verifier"] = _pkce_code_verifier(state)
+    flow = Flow.from_client_secrets_file(
+        Config.CLIENT_SECRET_FILE,
+        scopes=SCOPES,
+        **kwargs,
+    )
     flow.redirect_uri = redirect_uri
     return flow
 
 
 def build_authorization_url(redirect_uri: str) -> tuple[str, str]:
-    flow = oauth_flow(redirect_uri)
-    url, state = flow.authorization_url(
+    state = secrets.token_urlsafe(32)
+    flow = oauth_flow(redirect_uri, state=state)
+    url, returned_state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
     )
-    return url, state
+    return url, returned_state
 
 
 def youtube_data_service(credentials: Credentials):
