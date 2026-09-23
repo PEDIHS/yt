@@ -19,6 +19,7 @@ from publishing import (
     publishing_config_payload,
     queue_snapshot,
     release_job_now,
+    reschedule_channel_queue,
     schedule_job_manual,
     schedule_job_smart,
     update_publishing_config,
@@ -422,7 +423,16 @@ async def smart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("✅ روشن" if not cfg.get("enabled") else "⏸ خاموش", callback_data=f"autopost:{channel.id}:{0 if cfg.get('enabled') else 1}"),
             InlineKeyboardButton("🧠 تحلیل Peak", callback_data=f"peaks:{channel.id}"),
         ],
-        [InlineKeyboardButton("🕓 صف این کانال", callback_data=f"queuech:{channel.id}")],
+        [
+            InlineKeyboardButton("1/روز", callback_data=f"perdaycb:{channel.id}:1"),
+            InlineKeyboardButton("2/روز", callback_data=f"perdaycb:{channel.id}:2"),
+            InlineKeyboardButton("3/روز", callback_data=f"perdaycb:{channel.id}:3"),
+            InlineKeyboardButton("4/روز", callback_data=f"perdaycb:{channel.id}:4"),
+        ],
+        [
+            InlineKeyboardButton("♻️ زمان‌بندی مجدد", callback_data=f"resched:{channel.id}"),
+            InlineKeyboardButton("🕓 صف این کانال", callback_data=f"queuech:{channel.id}"),
+        ],
     ])
     await update.effective_message.reply_text("\n".join(lines), reply_markup=keyboard)
 
@@ -479,6 +489,72 @@ async def perday_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         manual_slots=cfg.get("manual_slots", []),
     )
     await update.effective_message.reply_text(f"✅ ظرفیت روزانه {channel.title}: {count} ویدیو.")
+
+
+async def window_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    if len(context.args) < 3:
+        await update.effective_message.reply_text("استفاده: /window CHANNEL_ID START_HOUR END_HOUR")
+        return
+    channel = _resolve_channel_for_command(update.effective_user.id, context.args[0])
+    try:
+        start_hour = int(context.args[1])
+        end_hour = int(context.args[2])
+    except ValueError:
+        start_hour = end_hour = -1
+    if not channel or not (0 <= start_hour < end_hour <= 23):
+        await update.effective_message.reply_text("کانال یا بازه ساعت نامعتبر است.")
+        return
+    cfg = publishing_config_payload(channel.id)
+    try:
+        update_publishing_config(
+            channel.id,
+            enabled=cfg.get("enabled", False),
+            smart_peak_enabled=cfg.get("smart_peak_enabled", True),
+            videos_per_day=cfg.get("videos_per_day", 2),
+            timezone_name=cfg.get("timezone", "Asia/Tehran"),
+            minimum_gap_minutes=cfg.get("minimum_gap_minutes", 180),
+            allowed_start_hour=start_hour,
+            allowed_end_hour=end_hour,
+            manual_slots=cfg.get("manual_slots", []),
+        )
+        await update.effective_message.reply_text(f"✅ بازه مجاز انتشار: {start_hour:02d}:00 تا {end_hour:02d}:00")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def reschedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    channel = _resolve_channel_for_command(update.effective_user.id, context.args[0] if context.args else None)
+    if not channel:
+        await update.effective_message.reply_text("کانال پیدا نشد.")
+        return
+    try:
+        count = await asyncio.to_thread(reschedule_channel_queue, channel.id)
+        await update.effective_message.reply_text(f"✅ {count} آیتم Smart با تنظیمات جدید دوباره Slot گرفت.")
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ {exc}")
+
+
+async def bulk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    channel = _resolve_channel_for_command(update.effective_user.id, context.args[0] if context.args else None)
+    if not channel:
+        await update.effective_message.reply_text("کانال پیدا نشد. اول /channels")
+        return
+    context.user_data.clear()
+    context.user_data["bulk_channel_id"] = channel.id
+    await update.effective_message.reply_text(
+        "📦 هر خط را به شکل زیر بفرست:\n"
+        "Instagram URL | عنوان\n\n"
+        "مثال:\n"
+        "https://instagram.com/reel/... | ویدیوی اول\n"
+        "https://instagram.com/reel/... | ویدیوی دوم\n\n"
+        "همه آیتم‌ها طبق Smart Publisher همین کانال صف می‌شوند."
+    )
 
 
 async def peaks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1194,8 +1270,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/connect · /toggle id · /setprivacy id ... · /sethashtags id ...\n\n"
         "✨ انتشار هوشمند\n"
         "/smart · /peaks [id] · /autopost id on|off · /perday id N\n"
-        "/timezone id Asia/Tehran · /gap id MIN · /slots id 12,18,21\n"
-        "/queue [id] · /schedulejob JOB_ID YYYY-MM-DDTHH:MM · /publishnow JOB_ID · /canceljob JOB_ID\n\n"
+        "/timezone id Asia/Tehran · /gap id MIN · /slots id 12,18,21 · /window id 9 23\n"
+        "/queue [id] · /bulk [id] · /reschedule [id]\n"
+        "/schedulejob JOB_ID YYYY-MM-DDTHH:MM · /publishnow JOB_ID · /canceljob JOB_ID\n\n"
         "🎬 مدیریت ویدیو\n"
         "/videos [id] · /video VIDEO_ID · /videoprivacy VIDEO_ID public|unlisted|private\n"
         "/videotitle VIDEO_ID title · /videodesc VIDEO_ID description · /videotags VIDEO_ID tag1,tag2\n"
@@ -1228,6 +1305,40 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = (update.effective_message.text or "").strip()
     user_id = update.effective_user.id
+
+    bulk_channel_id = context.user_data.get("bulk_channel_id")
+    if bulk_channel_id:
+        created = 0
+        errors = []
+        for index, raw_line in enumerate(text.splitlines(), start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            if "|" not in line:
+                errors.append(f"خط {index}: URL | Title")
+                continue
+            source_url, title = [part.strip() for part in line.split("|", 1)]
+            if not is_supported_instagram_url(source_url) or not title:
+                errors.append(f"خط {index}: نامعتبر")
+                continue
+            try:
+                job = create_job(
+                    channel_id=int(bulk_channel_id),
+                    source_url=source_url,
+                    title=title,
+                    source="telegram-bulk",
+                    telegram_user_id=user_id,
+                )
+                await asyncio.to_thread(schedule_job_smart, job.id)
+                created += 1
+            except Exception as exc:
+                errors.append(f"خط {index}: {str(exc)[:80]}")
+        context.user_data.clear()
+        message = f"✅ {created} ویدیو وارد صف هوشمند شد."
+        if errors:
+            message += "\n⚠️ " + " | ".join(errors[:5])
+        await update.effective_message.reply_text(message)
+        return
 
     pending_video_edit = context.user_data.get("pending_video_edit")
     if pending_video_edit:
@@ -1380,6 +1491,33 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             manual_slots=cfg.get("manual_slots", []),
         )
         await query.message.reply_text("✅ تنظیم Auto Publisher تغییر کرد.")
+    elif data.startswith("perdaycb:"):
+        _, raw_channel, raw_count = data.split(":", 2)
+        channel_id = int(raw_channel)
+        count = int(raw_count)
+        cfg = publishing_config_payload(channel_id)
+        try:
+            updated = update_publishing_config(
+                channel_id,
+                enabled=cfg.get("enabled", False),
+                smart_peak_enabled=cfg.get("smart_peak_enabled", True),
+                videos_per_day=count,
+                timezone_name=cfg.get("timezone", "Asia/Tehran"),
+                minimum_gap_minutes=cfg.get("minimum_gap_minutes", 180),
+                allowed_start_hour=cfg.get("allowed_start_hour", 9),
+                allowed_end_hour=cfg.get("allowed_end_hour", 23),
+                manual_slots=cfg.get("manual_slots", []),
+            )
+            await query.message.reply_text(f"✅ ظرفیت روزانه → {count} ویدیو")
+        except Exception as exc:
+            await query.message.reply_text(f"❌ {exc}")
+    elif data.startswith("resched:"):
+        channel_id = int(data.split(":", 1)[1])
+        try:
+            count = await asyncio.to_thread(reschedule_channel_queue, channel_id)
+            await query.message.reply_text(f"♻️ {count} آیتم صف دوباره زمان‌بندی شد.")
+        except Exception as exc:
+            await query.message.reply_text(f"❌ {exc}")
     elif data.startswith("peaks:"):
         channel_id = int(data.split(":", 1)[1])
         await query.message.reply_text("🧠 در حال تحلیل Peak...")
@@ -1669,6 +1807,7 @@ async def _post_init(application: Application) -> None:
         BotCommand("stats", "آمار کانال انتخاب‌شده"),
         BotCommand("smart", "وضعیت انتشار هوشمند"),
         BotCommand("queue", "صف ویدیوهای در انتظار"),
+        BotCommand("bulk", "افزودن گروهی به صف هوشمند"),
         BotCommand("videos", "آخرین ویدیوهای کانال"),
         BotCommand("uploads", "آخرین Jobها"),
         BotCommand("peaks", "تحلیل ساعات پیک"),
@@ -1712,6 +1851,9 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("timezone", timezone_command))
     app.add_handler(CommandHandler("gap", gap_command))
     app.add_handler(CommandHandler("slots", slots_command))
+    app.add_handler(CommandHandler("window", window_command))
+    app.add_handler(CommandHandler("reschedule", reschedule_command))
+    app.add_handler(CommandHandler("bulk", bulk_command))
     app.add_handler(CommandHandler("peaks", peaks_command))
     app.add_handler(CommandHandler("queue", queue_command))
     app.add_handler(CommandHandler("publishnow", publishnow_command))
