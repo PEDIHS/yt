@@ -37,11 +37,28 @@ from integrations import (
 from models import AuditLog, OAuthRequest, UploadJob, YouTubeChannel
 from security import credentials_match, csrf_token, login_required, require_csrf
 from youtube import (
+    add_video_to_playlist,
     build_authorization_url,
     channel_authorization_state,
     connect_channel,
+    create_playlist,
+    delete_caption,
+    delete_comment,
+    delete_playlist,
+    delete_video,
+    get_video_manager_data,
+    list_channel_playlists,
+    list_channel_videos,
+    list_video_captions,
+    list_video_comments,
+    moderate_comment,
     oauth_flow,
     refresh_channel,
+    reply_to_comment,
+    set_video_thumbnail,
+    update_playlist,
+    update_video_metadata,
+    upload_caption,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
@@ -56,7 +73,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=Config.PUBLIC_BASE_URL.startswith("https://"),
-    MAX_CONTENT_LENGTH=2 * 1024 * 1024,
+    MAX_CONTENT_LENGTH=105 * 1024 * 1024,
 )
 init_db()
 
@@ -592,6 +609,319 @@ def channel_delete(channel_id: int):
             flash("کانال حذف شد.", "success")
     _audit("panel", "channel_delete_or_disable", f"channel_id={channel_id}")
     return redirect(url_for("channels"))
+
+
+
+@app.get("/videos")
+@login_required
+def videos_manager():
+    with SessionLocal() as db:
+        channels_list = db.query(YouTubeChannel).order_by(YouTubeChannel.label.asc()).all()
+
+    selected_channel = None
+    if channels_list:
+        try:
+            selected_id = int(request.args.get("channel_id") or channels_list[0].id)
+        except (TypeError, ValueError):
+            selected_id = channels_list[0].id
+        selected_channel = next((item for item in channels_list if item.id == selected_id), channels_list[0])
+
+    videos_payload = {"items": [], "next_page_token": ""}
+    playlists = []
+    authorization = {}
+    manager_error = None
+    if selected_channel:
+        try:
+            videos_payload = list_channel_videos(
+                selected_channel.id,
+                page_token=request.args.get("page_token", "").strip(),
+                max_results=24,
+            )
+            playlists = list_channel_playlists(selected_channel.id)
+            authorization = channel_authorization_state(selected_channel.id)
+        except Exception as exc:
+            manager_error = str(exc)
+            logger.warning("Video manager load failed for channel %s: %s", selected_channel.id, exc)
+
+    return render_template(
+        "videos.html",
+        channels=channels_list,
+        selected_channel=selected_channel,
+        videos=videos_payload.get("items", []),
+        next_page_token=videos_payload.get("next_page_token", ""),
+        playlists=playlists,
+        authorization=authorization,
+        manager_error=manager_error,
+    )
+
+
+@app.get("/videos/<int:channel_id>/<video_id>")
+@login_required
+def video_detail(channel_id: int, video_id: str):
+    with SessionLocal() as db:
+        channel = db.get(YouTubeChannel, channel_id)
+        if not channel:
+            return "Channel not found", 404
+
+    video = None
+    comments = []
+    held_comments = []
+    captions = []
+    playlists = []
+    page_errors = {}
+    try:
+        video = get_video_manager_data(channel_id, video_id)
+    except Exception as exc:
+        flash(f"دریافت ویدیو ناموفق بود: {exc}", "danger")
+        return redirect(url_for("videos_manager", channel_id=channel_id))
+
+    for key, loader in (
+        ("comments", lambda: list_video_comments(channel_id, video_id, "published").get("items", [])),
+        ("held_comments", lambda: list_video_comments(channel_id, video_id, "heldForReview").get("items", [])),
+        ("captions", lambda: list_video_captions(channel_id, video_id)),
+        ("playlists", lambda: list_channel_playlists(channel_id)),
+    ):
+        try:
+            value = loader()
+            if key == "comments":
+                comments = value
+            elif key == "held_comments":
+                held_comments = value
+            elif key == "captions":
+                captions = value
+            else:
+                playlists = value
+        except Exception as exc:
+            page_errors[key] = str(exc)
+
+    try:
+        authorization = channel_authorization_state(channel_id)
+    except Exception as exc:
+        authorization = {"manage": False, "force_ssl": False, "error": str(exc)}
+
+    return render_template(
+        "video_detail.html",
+        channel=channel,
+        video=video,
+        comments=comments,
+        held_comments=held_comments,
+        captions=captions,
+        playlists=playlists,
+        authorization=authorization,
+        page_errors=page_errors,
+    )
+
+
+@app.post("/videos/<int:channel_id>/<video_id>/edit")
+@login_required
+def video_edit(channel_id: int, video_id: str):
+    require_csrf()
+    tags_raw = request.form.get("tags", "")
+    tags = [part.strip() for part in tags_raw.replace("\n", ",").split(",") if part.strip()]
+    try:
+        update_video_metadata(
+            channel_id,
+            video_id,
+            title=request.form.get("title", ""),
+            description=request.form.get("description", ""),
+            tags=tags,
+            privacy=request.form.get("privacy", "private"),
+            category_id=request.form.get("category_id", "22"),
+            made_for_kids=request.form.get("made_for_kids") == "on",
+            embeddable=request.form.get("embeddable") == "on",
+        )
+        _audit("panel", "youtube_video_updated", f"channel_id={channel_id}; video_id={video_id}")
+        flash("اطلاعات ویدیو روی YouTube بروزرسانی شد.", "success")
+    except Exception as exc:
+        flash(f"ویرایش ویدیو ناموفق بود: {exc}", "danger")
+    return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
+
+
+@app.post("/videos/<int:channel_id>/<video_id>/thumbnail")
+@login_required
+def video_thumbnail(channel_id: int, video_id: str):
+    require_csrf()
+    uploaded = request.files.get("thumbnail")
+    if not uploaded or not uploaded.filename:
+        flash("فایل Thumbnail انتخاب نشده است.", "warning")
+        return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
+    try:
+        content = uploaded.read(50 * 1024 * 1024 + 1)
+        set_video_thumbnail(channel_id, video_id, content, uploaded.mimetype or "application/octet-stream")
+        _audit("panel", "youtube_thumbnail_updated", f"channel_id={channel_id}; video_id={video_id}")
+        flash("Thumbnail جدید روی YouTube تنظیم شد.", "success")
+    except Exception as exc:
+        flash(f"تغییر Thumbnail ناموفق بود: {exc}", "danger")
+    return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
+
+
+@app.post("/videos/<int:channel_id>/<video_id>/delete")
+@login_required
+def video_delete(channel_id: int, video_id: str):
+    require_csrf()
+    confirmation = request.form.get("confirmation", "").strip()
+    if confirmation != "DELETE":
+        flash("برای حذف دائمی، عبارت DELETE را وارد کن.", "warning")
+        return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
+    try:
+        delete_video(channel_id, video_id)
+        try:
+            refresh_channel(channel_id)
+        except Exception:
+            pass
+        _audit("panel", "youtube_video_deleted", f"channel_id={channel_id}; video_id={video_id}")
+        flash("ویدیو برای همیشه از YouTube حذف شد.", "success")
+        return redirect(url_for("videos_manager", channel_id=channel_id))
+    except Exception as exc:
+        flash(f"حذف ویدیو ناموفق بود: {exc}", "danger")
+        return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
+
+
+@app.post("/videos/<int:channel_id>/<video_id>/playlists/add")
+@login_required
+def video_playlist_add(channel_id: int, video_id: str):
+    require_csrf()
+    playlist_id = request.form.get("playlist_id", "").strip()
+    try:
+        add_video_to_playlist(channel_id, playlist_id, video_id)
+        _audit("panel", "youtube_playlist_item_added", f"channel_id={channel_id}; video_id={video_id}; playlist_id={playlist_id}")
+        flash("ویدیو به Playlist اضافه شد.", "success")
+    except Exception as exc:
+        flash(f"افزودن به Playlist ناموفق بود: {exc}", "danger")
+    return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
+
+
+@app.post("/playlists/<int:channel_id>/create")
+@login_required
+def playlist_create(channel_id: int):
+    require_csrf()
+    try:
+        create_playlist(
+            channel_id,
+            request.form.get("title", ""),
+            request.form.get("description", ""),
+            request.form.get("privacy", "private"),
+        )
+        _audit("panel", "youtube_playlist_created", f"channel_id={channel_id}")
+        flash("Playlist جدید ساخته شد.", "success")
+    except Exception as exc:
+        flash(f"ساخت Playlist ناموفق بود: {exc}", "danger")
+    return redirect(url_for("videos_manager", channel_id=channel_id))
+
+
+@app.post("/playlists/<int:channel_id>/<playlist_id>/edit")
+@login_required
+def playlist_edit(channel_id: int, playlist_id: str):
+    require_csrf()
+    try:
+        update_playlist(
+            channel_id,
+            playlist_id,
+            request.form.get("title", ""),
+            request.form.get("description", ""),
+            request.form.get("privacy", "private"),
+        )
+        _audit("panel", "youtube_playlist_updated", f"channel_id={channel_id}; playlist_id={playlist_id}")
+        flash("Playlist بروزرسانی شد.", "success")
+    except Exception as exc:
+        flash(f"ویرایش Playlist ناموفق بود: {exc}", "danger")
+    return redirect(url_for("videos_manager", channel_id=channel_id))
+
+
+@app.post("/playlists/<int:channel_id>/<playlist_id>/delete")
+@login_required
+def playlist_delete(channel_id: int, playlist_id: str):
+    require_csrf()
+    try:
+        delete_playlist(channel_id, playlist_id)
+        _audit("panel", "youtube_playlist_deleted", f"channel_id={channel_id}; playlist_id={playlist_id}")
+        flash("Playlist حذف شد.", "success")
+    except Exception as exc:
+        flash(f"حذف Playlist ناموفق بود: {exc}", "danger")
+    return redirect(url_for("videos_manager", channel_id=channel_id))
+
+
+@app.post("/videos/<int:channel_id>/<video_id>/comments/<comment_id>/reply")
+@login_required
+def video_comment_reply(channel_id: int, video_id: str, comment_id: str):
+    require_csrf()
+    try:
+        reply_to_comment(channel_id, video_id, comment_id, request.form.get("text", ""))
+        _audit("panel", "youtube_comment_replied", f"channel_id={channel_id}; video_id={video_id}")
+        flash("پاسخ روی YouTube ارسال شد.", "success")
+    except Exception as exc:
+        flash(f"ارسال پاسخ ناموفق بود: {exc}", "danger")
+    return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
+
+
+@app.post("/videos/<int:channel_id>/<video_id>/comments/<comment_id>/moderate")
+@login_required
+def video_comment_moderate(channel_id: int, video_id: str, comment_id: str):
+    require_csrf()
+    try:
+        moderate_comment(
+            channel_id,
+            video_id,
+            comment_id,
+            request.form.get("status", "published"),
+            request.form.get("ban_author") == "on",
+        )
+        _audit("panel", "youtube_comment_moderated", f"channel_id={channel_id}; video_id={video_id}; status={request.form.get('status')}")
+        flash("وضعیت Comment بروزرسانی شد.", "success")
+    except Exception as exc:
+        flash(f"مدیریت Comment ناموفق بود: {exc}", "danger")
+    return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
+
+
+@app.post("/videos/<int:channel_id>/<video_id>/comments/<comment_id>/delete")
+@login_required
+def video_comment_delete(channel_id: int, video_id: str, comment_id: str):
+    require_csrf()
+    try:
+        delete_comment(channel_id, video_id, comment_id)
+        _audit("panel", "youtube_comment_deleted", f"channel_id={channel_id}; video_id={video_id}")
+        flash("Comment حذف شد.", "success")
+    except Exception as exc:
+        flash(f"حذف Comment ناموفق بود: {exc}", "danger")
+    return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
+
+
+@app.post("/videos/<int:channel_id>/<video_id>/captions/upload")
+@login_required
+def video_caption_upload(channel_id: int, video_id: str):
+    require_csrf()
+    uploaded = request.files.get("caption_file")
+    if not uploaded or not uploaded.filename:
+        flash("فایل Caption انتخاب نشده است.", "warning")
+        return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
+    try:
+        content = uploaded.read(100 * 1024 * 1024 + 1)
+        upload_caption(
+            channel_id,
+            video_id,
+            content=content,
+            language=request.form.get("language", ""),
+            name=request.form.get("name", ""),
+            is_draft=request.form.get("is_draft") == "on",
+        )
+        _audit("panel", "youtube_caption_uploaded", f"channel_id={channel_id}; video_id={video_id}")
+        flash("Caption روی YouTube آپلود شد.", "success")
+    except Exception as exc:
+        flash(f"آپلود Caption ناموفق بود: {exc}", "danger")
+    return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
+
+
+@app.post("/videos/<int:channel_id>/<video_id>/captions/<caption_id>/delete")
+@login_required
+def video_caption_delete(channel_id: int, video_id: str, caption_id: str):
+    require_csrf()
+    try:
+        delete_caption(channel_id, video_id, caption_id)
+        _audit("panel", "youtube_caption_deleted", f"channel_id={channel_id}; video_id={video_id}")
+        flash("Caption حذف شد.", "success")
+    except Exception as exc:
+        flash(f"حذف Caption ناموفق بود: {exc}", "danger")
+    return redirect(url_for("video_detail", channel_id=channel_id, video_id=video_id))
 
 
 @app.route("/upload", methods=["GET", "POST"])
