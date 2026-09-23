@@ -2,45 +2,96 @@
 {% block title %}کانال‌ها | YT Studio{% endblock %}
 {% block eyebrow %}Channel Portfolio{% endblock %}
 {% block heading %}کانال‌های YouTube{% endblock %}
-{% block subheading %}اتصال، وضعیت OAuth و عملکرد ۲۸ روزه هر کانال{% endblock %}
+{% block subheading %}اتصال اکانت‌ها، وضعیت OAuth و عملکرد همه کانال‌ها در یک نمای یکپارچه{% endblock %}
 
 {% block content %}
-<section class="channel-onboarding glass-card">
-  <div class="onboarding-copy">
-    <div class="hero-icon"><i data-lucide="user-round-plus"></i></div>
-    <div>
-      <span class="section-kicker">ONE-STEP CHANNEL CONNECT</span>
-      <h2>افزودن اکانت / کانال YouTube جدید</h2>
-      <p>فایل OAuth از نوع Web application را بده؛ پنل آن را بررسی می‌کند و بلافاصله ورود Google را برای اتصال کانال باز می‌کند.</p>
+<section class="yt-channel-hero glass-card">
+  <div class="yt-channel-hero-main">
+    <div class="yt-channel-mark"><i data-lucide="youtube"></i></div>
+    <div class="grow">
+      <span class="section-kicker">MULTI-CHANNEL CONTROL CENTER</span>
+      <h2>پرتفوی کانال‌های YouTube</h2>
+      <p>اکانت جدید را متصل کن؛ پروفایل، Subscribers، Views، Videos و Analytics به‌صورت خودکار وارد پنل می‌شوند.</p>
+      <div class="yt-hero-badges">
+        <span class="data-chip {{ 'chip-success' if google_status.configured and google_status.redirect_ok else 'chip-warning' }}">
+          <i data-lucide="{{ 'shield-check' if google_status.configured and google_status.redirect_ok else 'triangle-alert' }}"></i>
+          OAuth {{ 'Ready' if google_status.configured and google_status.redirect_ok else 'Needs setup' }}
+        </span>
+        <span class="data-chip"><i data-lucide="radio-tower"></i>{{ channels|length }} کانال</span>
+      </div>
+    </div>
+  </div>
+  <div class="yt-channel-summary">
+    <div><span>Subscribers</span><strong>{{ compact_number(channels|sum(attribute='subscriber_count')) }}</strong><i data-lucide="users"></i></div>
+    <div><span>Lifetime Views</span><strong>{{ compact_number(channels|sum(attribute='view_count')) }}</strong><i data-lucide="eye"></i></div>
+    <div><span>Videos</span><strong>{{ compact_number(channels|sum(attribute='video_count')) }}</strong><i data-lucide="clapperboard"></i></div>
+  </div>
+</section>
+
+<section class="yt-connect-center glass-card">
+  <div class="yt-connect-info">
+    <span class="section-kicker">ADD NEW ACCOUNT</span>
+    <h2>اتصال اکانت یا Brand Channel جدید</h2>
+    <p>بعد از ورود Google، اطلاعات کانال از YouTube API دریافت و credential هر کانال جداگانه و رمزنگاری‌شده ذخیره می‌شود.</p>
+    <div class="yt-connect-steps">
+      <div><span>1</span><strong>OAuth Client</strong><small>Web Application با callback صحیح</small></div>
+      <div><span>2</span><strong>Google Login</strong><small>اکانت یا Brand Channel را انتخاب کن</small></div>
+      <div><span>3</span><strong>Auto Sync</strong><small>پروفایل و آمار خودکار وارد می‌شود</small></div>
     </div>
   </div>
 
-  <form id="channelQuickConnect" class="channel-connect-wizard" enctype="multipart/form-data">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-
-    <label class="oauth-dropzone" for="oauthClientFile">
-      <input id="oauthClientFile" type="file" name="client_secret" accept=".json,application/json" required>
-      <span class="oauth-drop-icon"><i data-lucide="file-key-2"></i></span>
-      <span class="oauth-drop-copy">
-        <strong>Google OAuth JSON</strong>
-        <small id="oauthFileName">فایل Web application را انتخاب کن</small>
-      </span>
-      <span class="oauth-drop-action">انتخاب فایل</span>
-    </label>
-
-    <div class="connect-wizard-footer">
-      <label class="connect-label-field">
-        <span>نام داخلی کانال <small>اختیاری</small></span>
-        <input id="channelLabelInput" name="label" placeholder="اگر خالی باشد اسم واقعی کانال ثبت می‌شود" maxlength="120">
-      </label>
-      <button id="channelConnectButton" class="btn btn-primary connect-now-btn" type="submit">
-        <i data-lucide="log-in"></i>
-        <span>آپلود و اتصال با Google</span>
-      </button>
+  <div class="yt-connect-panel">
+    {% if google_status.configured and google_status.redirect_ok %}
+    <div class="yt-ready-state">
+      <span class="yt-ready-icon"><i data-lucide="badge-check"></i></span>
+      <div><strong>Google OAuth آماده است</strong><small>برای افزودن کانال دیگر نیازی به آپلود مجدد JSON نیست.</small></div>
+      <span class="scope-badge ok"><span class="status-orb"></span>Ready</span>
     </div>
-
-    <div id="channelConnectStatus" class="connect-progress" hidden></div>
-  </form>
+    <form method="post" action="{{ url_for('channels_connect') }}" class="form-grid one yt-direct-connect">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>نام داخلی کانال <span class="hint">اختیاری</span>
+        <input name="label" placeholder="مثلاً Main Shorts — اگر خالی باشد نام واقعی کانال استفاده می‌شود" maxlength="120">
+      </label>
+      <button class="btn btn-primary yt-google-btn"><i data-lucide="log-in"></i> اتصال اکانت جدید با Google</button>
+    </form>
+    <details class="yt-oauth-replace">
+      <summary><i data-lucide="file-key-2"></i> استفاده از OAuth JSON جدید</summary>
+      <form id="channelQuickConnect" class="form-grid one" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="yt-file-picker">Google OAuth JSON
+          <input id="oauthClientFile" type="file" name="client_secret" accept=".json,application/json" required>
+          <span id="oauthFileName">فایل Web application را انتخاب کن</span>
+        </label>
+        <label>نام داخلی <span class="hint">اختیاری</span>
+          <input id="channelLabelInput" name="label" placeholder="نام داخلی کانال" maxlength="120">
+        </label>
+        <button id="channelConnectButton" class="btn btn-soft" type="submit"><i data-lucide="refresh-cw"></i> جایگزینی JSON و اتصال</button>
+        <div id="channelConnectStatus" class="yt-connect-progress" hidden></div>
+      </form>
+    </details>
+    {% else %}
+    <div class="yt-ready-state warning">
+      <span class="yt-ready-icon"><i data-lucide="key-round"></i></span>
+      <div><strong>ابتدا OAuth Client را وصل کن</strong><small>JSON باید از نوع Web application و callback آن دقیقاً روی دامنه پنل باشد.</small></div>
+    </div>
+    <form id="channelQuickConnect" class="form-grid one yt-first-connect" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="yt-file-picker">Google OAuth JSON
+        <input id="oauthClientFile" type="file" name="client_secret" accept=".json,application/json" required>
+        <span id="oauthFileName">فایل Web application را انتخاب کن</span>
+      </label>
+      <label>نام داخلی کانال <span class="hint">اختیاری</span>
+        <input id="channelLabelInput" name="label" placeholder="اگر خالی باشد نام واقعی کانال ثبت می‌شود" maxlength="120">
+      </label>
+      <button id="channelConnectButton" class="btn btn-primary yt-google-btn" type="submit"><i data-lucide="upload-cloud"></i> آپلود JSON و اتصال با Google</button>
+      <div id="channelConnectStatus" class="yt-connect-progress" hidden></div>
+    </form>
+    {% endif %}
+    <div class="yt-connect-links">
+      <a href="{{ url_for('integrations_page') }}"><i data-lucide="settings-2"></i> تنظیمات اتصال‌ها و API</a>
+      <code>https://yt.pedramhs.ir/oauth/callback</code>
+    </div>
+  </div>
 
   <form id="googleConnectBridge" method="post" action="{{ url_for('channels_connect') }}" hidden>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -48,22 +99,29 @@
   </form>
 </section>
 
-<div class="channel-portfolio-grid">
+<div class="yt-section-heading">
+  <div><span class="section-kicker">CONNECTED CHANNELS</span><h2>کانال‌های متصل</h2><p>اطلاعات Lifetime و Analytics هر کانال در یک کارت مستقل.</p></div>
+  {% if channels %}<span class="data-chip chip-success"><i data-lucide="circle-check"></i>{{ channels|length }} Connected</span>{% endif %}
+</div>
+
+<div class="channel-portfolio-grid yt-portfolio-grid">
   {% for channel in channels %}
   {% set data = analytics_map.get(channel.id) %}
   {% set stats = data.summary if data else None %}
   {% set auth = authorization.get(channel.id, {}) %}
-  <article class="portfolio-card glass-card">
-    <div class="portfolio-head">
+  <article class="portfolio-card glass-card yt-channel-card">
+    <div class="yt-card-accent"></div>
+    <div class="portfolio-head yt-card-head">
       <div class="channel-identity">
-        {% if channel.thumbnail_url %}<img src="{{ channel.thumbnail_url }}" alt="{{ channel.title }}">{% else %}<div class="avatar avatar-lg">YT</div>{% endif %}
+        <div class="yt-avatar-shell">
+          {% if channel.thumbnail_url %}<img src="{{ channel.thumbnail_url }}" alt="{{ channel.title }}">{% else %}<div class="avatar avatar-lg">YT</div>{% endif %}
+          <span class="yt-live-dot {{ 'active' if channel.is_active else 'inactive' }}"></span>
+        </div>
         <div class="grow">
-          <div class="label-line">
-            <strong>{{ channel.label }}</strong>
-            <span class="status-dot {{ 'active' if channel.is_active else 'inactive' }}"></span>
-          </div>
-          <small>{{ channel.title }}</small>
-          {% if channel.custom_url %}<span class="channel-handle-mini">{{ channel.custom_url }}</span>{% endif %}
+          <span class="section-kicker">{{ 'ACTIVE CHANNEL' if channel.is_active else 'PAUSED CHANNEL' }}</span>
+          <strong class="yt-channel-title">{{ channel.title }}</strong>
+          <small>{{ channel.custom_url or channel.youtube_channel_id }}</small>
+          {% if channel.label != channel.title %}<span class="yt-internal-label">{{ channel.label }}</span>{% endif %}
         </div>
       </div>
       <span class="scope-badge {% if auth.analytics %}ok{% else %}warn{% endif %}">
@@ -72,59 +130,49 @@
       </span>
     </div>
 
-    <div class="portfolio-lifetime">
-      <div><span>Subscribers</span><strong>{{ compact_number(channel.subscriber_count) }}</strong></div>
-      <div><span>Lifetime Views</span><strong>{{ compact_number(channel.view_count) }}</strong></div>
-      <div><span>Videos</span><strong>{{ compact_number(channel.video_count) }}</strong></div>
+    <div class="yt-lifetime-grid">
+      <div><i data-lucide="users"></i><span>Subscribers</span><strong>{{ compact_number(channel.subscriber_count) }}</strong></div>
+      <div><i data-lucide="eye"></i><span>Lifetime Views</span><strong>{{ compact_number(channel.view_count) }}</strong></div>
+      <div><i data-lucide="clapperboard"></i><span>Videos</span><strong>{{ compact_number(channel.video_count) }}</strong></div>
     </div>
 
     {% if stats %}
-    <div class="portfolio-period-head"><span>۲۸ روز اخیر</span><span>{{ data.fetched_at[:10] if data.fetched_at else '' }}</span></div>
-    <div class="portfolio-period">
-      <div><span>Views</span><strong>{{ compact_number(stats.views) }}</strong></div>
-      <div><span>Likes</span><strong>{{ compact_number(stats.likes) }}</strong></div>
-      <div><span>Comments</span><strong>{{ compact_number(stats.comments) }}</strong></div>
-      <div><span>Net Subs</span><strong class="{% if stats.subscribers_net < 0 %}negative{% endif %}">{% if stats.subscribers_net > 0 %}+{% endif %}{{ compact_number(stats.subscribers_net) }}</strong></div>
+    <div class="yt-period-box">
+      <div class="yt-period-head"><span>عملکرد ۲۸ روز اخیر</span><small>{{ data.fetched_at[:10] if data.fetched_at else '' }}</small></div>
+      <div class="yt-period-metrics">
+        <div><span>Views</span><strong>{{ compact_number(stats.views) }}</strong></div>
+        <div><span>Likes</span><strong>{{ compact_number(stats.likes) }}</strong></div>
+        <div><span>Comments</span><strong>{{ compact_number(stats.comments) }}</strong></div>
+        <div><span>Net Subs</span><strong class="{% if stats.subscribers_net < 0 %}negative{% else %}positive{% endif %}">{% if stats.subscribers_net > 0 %}+{% endif %}{{ compact_number(stats.subscribers_net) }}</strong></div>
+      </div>
     </div>
     {% else %}
-    <div class="portfolio-no-data"><i data-lucide="database-zap"></i><span>Analytics هنوز Sync نشده است.</span></div>
+    <div class="yt-no-analytics"><i data-lucide="database-zap"></i><div><strong>Analytics هنوز Sync نشده</strong><small>از Analytics Studio اولین Sync را اجرا کن.</small></div></div>
     {% endif %}
 
-    <div class="channel-tech-meta">
-      <span><i data-lucide="fingerprint"></i>{{ channel.youtube_channel_id }}</span>
-      <span><i data-lucide="refresh-cw"></i>{{ channel.last_synced_at.strftime('%Y-%m-%d %H:%M') if channel.last_synced_at else 'Not synced' }}</span>
-    </div>
-
-    <div class="portfolio-footer">
-      <div class="portfolio-meta">
-        <span class="privacy-dot privacy-{{ channel.default_privacy }}"></span>
-        <span>{{ channel.default_privacy|capitalize }}</span>
-        <span class="separator">•</span>
-        <span>#{{ channel.id }}</span>
+    <div class="yt-card-footer">
+      <div class="yt-card-meta">
+        <span><i data-lucide="lock-keyhole"></i>{{ channel.default_privacy|capitalize }}</span>
+        <span><i data-lucide="refresh-cw"></i>{{ channel.last_synced_at.strftime('%Y-%m-%d %H:%M') if channel.last_synced_at else 'Not synced' }}</span>
       </div>
       <a class="btn btn-soft" href="{{ url_for('channel_detail', channel_id=channel.id, days=28) }}"><i data-lucide="chart-no-axes-combined"></i> Analytics Studio</a>
     </div>
   </article>
   {% else %}
-  <div class="empty-state glass-card full-span">
-    <i data-lucide="radio-tower"></i>
-    <h3>کانالی متصل نشده است</h3>
-    <p>از فرم بالا اولین کانال YouTube را با OAuth متصل کنید.</p>
+  <div class="empty-state glass-card full-span yt-empty-channels">
+    <div class="yt-empty-icon"><i data-lucide="youtube"></i></div>
+    <h3>هنوز کانالی متصل نشده</h3>
+    <p>از بخش اتصال بالا اولین اکانت YouTube را اضافه کن؛ اطلاعات کانال بعد از OAuth خودکار نمایش داده می‌شود.</p>
   </div>
   {% endfor %}
 </div>
-
-<section class="info-strip glass-card">
-  <div><i data-lucide="shield-check"></i><span><strong>Credential مستقل</strong><small>توکن هر کانال رمزنگاری و جدا ذخیره می‌شود.</small></span></div>
-  <div><i data-lucide="line-chart"></i><span><strong>Analytics API</strong><small>Views، Likes، Comments، Watch Time و Subscriber growth.</small></span></div>
-  <div><i data-lucide="layers-3"></i><span><strong>Multi‑Channel</strong><small>آمار و تنظیمات انتشار برای هر کانال مجزا است.</small></span></div>
-</section>
 {% endblock %}
 
 {% block scripts %}
 <script>
 (() => {
   const form = document.getElementById('channelQuickConnect');
+  if (!form) return;
   const fileInput = document.getElementById('oauthClientFile');
   const fileName = document.getElementById('oauthFileName');
   const button = document.getElementById('channelConnectButton');
@@ -133,48 +181,37 @@
   const bridgeLabel = document.getElementById('bridgeLabel');
   const labelInput = document.getElementById('channelLabelInput');
 
-  if (!form || !fileInput || !bridge) return;
-
-  fileInput.addEventListener('change', () => {
+  fileInput?.addEventListener('change', () => {
     fileName.textContent = fileInput.files?.[0]?.name || 'فایل Web application را انتخاب کن';
   });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const file = fileInput.files?.[0];
+    const file = fileInput?.files?.[0];
     if (!file) return;
-
     button.disabled = true;
     status.hidden = false;
-    status.className = 'connect-progress active';
-    status.innerHTML = '<span class="connect-spinner"></span><div><strong>در حال بررسی OAuth Client...</strong><small>بعد از تأیید فایل، صفحه Google به‌صورت خودکار باز می‌شود.</small></div>';
-
+    status.className = 'yt-connect-progress active';
+    status.innerHTML = '<span class="connect-spinner"></span><div><strong>در حال بررسی OAuth Client...</strong><small>بعد از تأیید، ورود Google خودکار باز می‌شود.</small></div>';
     try {
       const payload = new FormData();
       payload.append('csrf_token', form.querySelector('[name="csrf_token"]').value);
       payload.append('client_secret', file);
-
-      const response = await fetch('{{ url_for("integrations_google") }}', {
-        method: 'POST',
-        body: payload,
-        credentials: 'same-origin'
-      });
+      const response = await fetch('{{ url_for("integrations_google") }}', {method:'POST',body:payload,credentials:'same-origin'});
       const html = await response.text();
-      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const doc = new DOMParser().parseFromString(html,'text/html');
       const error = doc.querySelector('.flash.danger');
-
-      if (error) {
-        throw new Error(error.textContent.trim());
-      }
-
-      status.innerHTML = '<span class="connect-success"><i data-lucide="circle-check"></i></span><div><strong>OAuth Client آماده است</strong><small>در حال انتقال به Google برای انتخاب و تأیید کانال...</small></div>';
+      if (error) throw new Error(error.textContent.trim());
+      status.className = 'yt-connect-progress success';
+      status.innerHTML = '<i data-lucide="circle-check"></i><div><strong>OAuth آماده شد</strong><small>در حال انتقال به Google...</small></div>';
       if (window.lucide) window.lucide.createIcons();
-      bridgeLabel.value = labelInput.value.trim();
-      setTimeout(() => bridge.submit(), 350);
+      bridgeLabel.value = labelInput?.value.trim() || '';
+      setTimeout(() => bridge.submit(), 250);
     } catch (error) {
-      status.className = 'connect-progress error';
-      status.innerHTML = '<span class="connect-error-icon">!</span><div><strong>اتصال شروع نشد</strong><small></small></div>';
-      status.querySelector('small').textContent = error?.message || 'خطای نامشخص در فایل OAuth';
+      status.className = 'yt-connect-progress error';
+      status.innerHTML = '<i data-lucide="circle-x"></i><div><strong>اتصال شروع نشد</strong><small></small></div>';
+      status.querySelector('small').textContent = error?.message || 'خطای نامشخص در OAuth JSON';
+      if (window.lucide) window.lucide.createIcons();
       button.disabled = false;
     }
   });
