@@ -183,6 +183,8 @@ def validate_instagram_session(sessionid: str, csrftoken: str = "", ds_user_id: 
         return {"username": "", "user_id": "", "verified": False}
     if response.status_code in {401, 403}:
         raise ValueError("Instagram session is expired or invalid")
+    if response.status_code == 400:
+        return {"username": "", "user_id": "", "verified": False}
     if response.status_code != 200:
         raise ValueError(f"Instagram session check failed with HTTP {response.status_code}")
 
