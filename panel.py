@@ -38,6 +38,7 @@ from integrations import (
     create_claim_code,
     get_secret,
     google_oauth_status,
+    instagram_direct_health,
     instagram_status,
     normalize_instagram_cookie_blob,
     parse_instagram_cookie_blob,
@@ -348,6 +349,7 @@ def sync_all_analytics():
 def integrations_page():
     google_status = google_oauth_status()
     instagram = instagram_status()
+    instagram_direct = instagram_direct_health() if instagram.get("configured") else {"ok": False, "status": "not_configured"}
     bot_configured = bool(get_secret("telegram_bot_token") or Config.TELEGRAM_BOT_TOKEN)
     bot_username = get_secret("telegram_bot_username")
     primary_admin_id = get_secret("telegram_primary_admin_id")
@@ -357,6 +359,7 @@ def integrations_page():
         "integrations.html",
         google_status=google_status,
         instagram=instagram,
+        instagram_direct=instagram_direct,
         bot_configured=bot_configured,
         bot_username=bot_username,
         primary_admin_id=primary_admin_id,
