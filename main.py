@@ -107,6 +107,37 @@ def _set_selected_channel(user_id: int, channel_id: int) -> None:
         db.commit()
 
 
+def _video_manage_keyboard(channel_id: int, video_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✏️ عنوان", callback_data=f"vedit:{channel_id}:{video_id}:title"),
+            InlineKeyboardButton("📝 توضیحات", callback_data=f"vedit:{channel_id}:{video_id}:description"),
+            InlineKeyboardButton("🏷 Tags", callback_data=f"vedit:{channel_id}:{video_id}:tags"),
+        ],
+        [
+            InlineKeyboardButton("🌐 Public", callback_data=f"vpriv:{channel_id}:{video_id}:public"),
+            InlineKeyboardButton("🔗 Unlisted", callback_data=f"vpriv:{channel_id}:{video_id}:unlisted"),
+            InlineKeyboardButton("🔒 Private", callback_data=f"vpriv:{channel_id}:{video_id}:private"),
+        ],
+        [
+            InlineKeyboardButton("🖼 Thumbnail", callback_data=f"vmedia:{channel_id}:{video_id}:thumbnail"),
+            InlineKeyboardButton("📝 Caption", callback_data=f"vmedia:{channel_id}:{video_id}:caption"),
+        ],
+        [
+            InlineKeyboardButton("💬 Comments", callback_data=f"comments:{channel_id}:{video_id}"),
+            InlineKeyboardButton("📚 Playlist", callback_data=f"vplaylist:{channel_id}:{video_id}"),
+        ],
+        [
+            InlineKeyboardButton("👶 Kids", callback_data=f"vkids:{channel_id}:{video_id}"),
+            InlineKeyboardButton("🔌 Embed", callback_data=f"vembed:{channel_id}:{video_id}"),
+            InlineKeyboardButton("🗑 حذف", callback_data=f"delask:{channel_id}:{video_id}"),
+        ],
+        [
+            InlineKeyboardButton("🛠 Video Studio کامل", url=f"{Config.PUBLIC_BASE_URL}/videos/{channel_id}/{video_id}")
+        ],
+    ])
+
+
 def _channel_keyboard(active_only: bool = True) -> InlineKeyboardMarkup:
     channels = _get_channels(active_only=active_only)
     rows = []
@@ -555,11 +586,7 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as exc:
         await update.effective_message.reply_text(f"❌ {exc}")
         return
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌐 Public", callback_data=f"vpriv:{channel.id}:{video_id}:public"), InlineKeyboardButton("🔗 Unlisted", callback_data=f"vpriv:{channel.id}:{video_id}:unlisted"), InlineKeyboardButton("🔒 Private", callback_data=f"vpriv:{channel.id}:{video_id}:private")],
-        [InlineKeyboardButton("💬 Comments", callback_data=f"comments:{channel.id}:{video_id}"), InlineKeyboardButton("🗑 حذف", callback_data=f"delask:{channel.id}:{video_id}")],
-        [InlineKeyboardButton("🛠 Video Studio", url=f"{Config.PUBLIC_BASE_URL}/videos/{channel.id}/{video_id}")],
-    ])
+    keyboard = _video_manage_keyboard(channel.id, video_id)
     await update.effective_message.reply_text(
         f"🎬 {video['title']}\n"
         f"👁 {video['views']:,} · 👍 {video['likes']:,} · 💬 {video['comments']:,}\n"
@@ -1187,6 +1214,51 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.effective_message.text or "").strip()
     user_id = update.effective_user.id
 
+    pending_video_edit = context.user_data.get("pending_video_edit")
+    if pending_video_edit:
+        try:
+            channel_id = int(pending_video_edit["channel_id"])
+            video_id = pending_video_edit["video_id"]
+            field = pending_video_edit["field"]
+            video = await asyncio.to_thread(get_video_manager_data, channel_id, video_id)
+            title = text if field == "title" else video["title"]
+            description = text if field == "description" else video["description"]
+            tags = [part.strip() for part in text.split(",") if part.strip()] if field == "tags" else video["tags"]
+            await asyncio.to_thread(
+                update_video_metadata,
+                channel_id,
+                video_id,
+                title=title,
+                description=description,
+                tags=tags,
+                privacy=video["privacy"],
+                category_id=video["category_id"],
+                made_for_kids=video["made_for_kids"],
+                embeddable=video["embeddable"],
+            )
+            context.user_data.clear()
+            await update.effective_message.reply_text("✅ تغییر روی YouTube ذخیره شد.", reply_markup=_video_manage_keyboard(channel_id, video_id))
+        except Exception as exc:
+            await update.effective_message.reply_text(f"❌ ویرایش ناموفق بود: {exc}")
+        return
+
+    pending_caption_setup = context.user_data.get("pending_caption_setup")
+    if pending_caption_setup:
+        if "|" not in text:
+            await update.effective_message.reply_text("فرمت: fa | Persian")
+            return
+        language, name = [part.strip() for part in text.split("|", 1)]
+        if not language or not name:
+            await update.effective_message.reply_text("Language Code و نام Caption لازم‌اند.")
+            return
+        context.user_data["media_action"] = "caption"
+        context.user_data["media_video_id"] = pending_caption_setup["video_id"]
+        context.user_data["caption_language"] = language
+        context.user_data["caption_name"] = name
+        context.user_data.pop("pending_caption_setup", None)
+        await update.effective_message.reply_text("📎 حالا فایل Caption را به‌صورت Document بفرست.")
+        return
+
     if is_supported_instagram_url(text):
         context.user_data.clear()
         context.user_data["pending_url"] = text
@@ -1315,14 +1387,102 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         channel_id = int(raw_channel)
         try:
             video = await asyncio.to_thread(get_video_manager_data, channel_id, video_id)
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🌐 Public", callback_data=f"vpriv:{channel_id}:{video_id}:public"), InlineKeyboardButton("🔒 Private", callback_data=f"vpriv:{channel_id}:{video_id}:private")],
-                [InlineKeyboardButton("💬 Comments", callback_data=f"comments:{channel_id}:{video_id}"), InlineKeyboardButton("🗑 حذف", callback_data=f"delask:{channel_id}:{video_id}")],
-                [InlineKeyboardButton("🛠 پنل کامل", url=f"{Config.PUBLIC_BASE_URL}/videos/{channel_id}/{video_id}")],
-            ])
+            kb = _video_manage_keyboard(channel_id, video_id)
             await query.message.reply_text(f"🎬 {video['title']}\n👁 {video['views']:,} · 👍 {video['likes']:,}\n🔐 {video['privacy']}", reply_markup=kb)
         except Exception as exc:
             await query.message.reply_text(f"❌ {exc}")
+    elif data.startswith("vedit:"):
+        _, raw_channel, video_id, field = data.split(":", 3)
+        context.user_data.clear()
+        context.user_data["pending_video_edit"] = {
+            "channel_id": int(raw_channel),
+            "video_id": video_id,
+            "field": field,
+        }
+        label = {"title": "عنوان جدید", "description": "توضیحات جدید", "tags": "Tagها با کاما"}.get(field, field)
+        await query.message.reply_text(f"✏️ {label} را بفرست. برای لغو /cancel")
+    elif data.startswith("vmedia:"):
+        _, raw_channel, video_id, action = data.split(":", 3)
+        context.user_data.clear()
+        if action == "thumbnail":
+            context.user_data["media_action"] = "thumbnail"
+            context.user_data["media_video_id"] = video_id
+            await query.message.reply_text("🖼 تصویر جدید را به‌صورت Photo یا PNG/JPEG Document بفرست.")
+        else:
+            context.user_data["pending_caption_setup"] = {"video_id": video_id}
+            await query.message.reply_text("📝 Language Code و نام Caption را بفرست؛ مثال:\nfa | Persian")
+    elif data.startswith("vkids:"):
+        _, raw_channel, video_id = data.split(":", 2)
+        channel_id = int(raw_channel)
+        try:
+            video = await asyncio.to_thread(get_video_manager_data, channel_id, video_id)
+            new_value = not bool(video.get("made_for_kids"))
+            await asyncio.to_thread(
+                update_video_metadata,
+                channel_id,
+                video_id,
+                title=video["title"],
+                description=video["description"],
+                tags=video["tags"],
+                privacy=video["privacy"],
+                category_id=video["category_id"],
+                made_for_kids=new_value,
+                embeddable=video["embeddable"],
+            )
+            await query.message.reply_text(f"✅ Made for Kids → {'ON' if new_value else 'OFF'}", reply_markup=_video_manage_keyboard(channel_id, video_id))
+        except Exception as exc:
+            await query.message.reply_text(f"❌ {exc}")
+    elif data.startswith("vembed:"):
+        _, raw_channel, video_id = data.split(":", 2)
+        channel_id = int(raw_channel)
+        try:
+            video = await asyncio.to_thread(get_video_manager_data, channel_id, video_id)
+            new_value = not bool(video.get("embeddable"))
+            await asyncio.to_thread(
+                update_video_metadata,
+                channel_id,
+                video_id,
+                title=video["title"],
+                description=video["description"],
+                tags=video["tags"],
+                privacy=video["privacy"],
+                category_id=video["category_id"],
+                made_for_kids=video["made_for_kids"],
+                embeddable=new_value,
+            )
+            await query.message.reply_text(f"✅ Embed → {'ON' if new_value else 'OFF'}", reply_markup=_video_manage_keyboard(channel_id, video_id))
+        except Exception as exc:
+            await query.message.reply_text(f"❌ {exc}")
+    elif data.startswith("vplaylist:"):
+        _, raw_channel, video_id = data.split(":", 2)
+        channel_id = int(raw_channel)
+        try:
+            playlists = await asyncio.to_thread(list_channel_playlists, channel_id)
+            if not playlists:
+                await query.message.reply_text("Playlist سفارشی وجود ندارد. با /newplaylist بساز.")
+            else:
+                context.user_data["playlist_video_id"] = video_id
+                context.user_data["playlist_channel_id"] = channel_id
+                rows = []
+                for idx, item in enumerate(playlists[:20]):
+                    context.user_data[f"playlist_choice_{idx}"] = item["playlist_id"]
+                    rows.append([InlineKeyboardButton(item["title"][:50], callback_data=f"vpick:{idx}")])
+                await query.message.reply_text("📚 Playlist مقصد را انتخاب کن:", reply_markup=InlineKeyboardMarkup(rows))
+        except Exception as exc:
+            await query.message.reply_text(f"❌ {exc}")
+    elif data.startswith("vpick:"):
+        idx = int(data.split(":", 1)[1])
+        playlist_id = context.user_data.get(f"playlist_choice_{idx}")
+        video_id = context.user_data.get("playlist_video_id")
+        channel_id = context.user_data.get("playlist_channel_id")
+        if not playlist_id or not video_id or not channel_id:
+            await query.message.reply_text("این انتخاب منقضی شده؛ دوباره Playlist را باز کن.")
+        else:
+            try:
+                await asyncio.to_thread(add_video_to_playlist, int(channel_id), playlist_id, video_id)
+                await query.message.reply_text("✅ ویدیو به Playlist اضافه شد.")
+            except Exception as exc:
+                await query.message.reply_text(f"❌ {exc}")
     elif data.startswith("vpriv:"):
         _, raw_channel, video_id, privacy = data.split(":", 3)
         channel_id = int(raw_channel)
