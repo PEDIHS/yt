@@ -137,24 +137,53 @@ def build_instagram_cookie_blob(sessionid: str, csrftoken: str = "", ds_user_id:
     return "\n".join(rows) + "\n"
 
 
-def parse_instagram_cookie_blob(raw: str) -> dict:
-    cookies: dict[str, str] = {}
-    allowed = {"sessionid", "csrftoken", "ds_user_id"}
+def _instagram_cookie_rows(raw: str) -> list[tuple[str, str, str, str, str, str, str]]:
+    rows = []
     for raw_line in raw.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
+        line = raw_line.rstrip("\r\n")
+        if not line.strip():
+            continue
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_"):]
+        elif line.lstrip().startswith("#"):
             continue
         parts = line.split("\t")
         if len(parts) < 7:
             continue
-        domain, _include_subdomains, _path, _secure, _expires, name, value = parts[:7]
+        domain, include_subdomains, path, secure, expires, name, value = parts[:7]
         if "instagram.com" not in domain.lower():
             continue
-        if name in allowed and value:
-            cookies[name] = value
+        if not name or not value:
+            continue
+        rows.append((domain, include_subdomains, path, secure, expires, name, value))
+    return rows
+
+
+def parse_instagram_cookie_blob(raw: str) -> dict:
+    cookies: dict[str, str] = {}
+    for _domain, _include_subdomains, _path, _secure, _expires, name, value in _instagram_cookie_rows(raw):
+        cookies[name] = value
     if not cookies.get("sessionid"):
         raise ValueError("cookies.txt does not contain an Instagram sessionid")
     return cookies
+
+
+def normalize_instagram_cookie_blob(raw: str) -> str:
+    rows = _instagram_cookie_rows(raw)
+    if not any(name == "sessionid" for *_rest, name, _value in rows):
+        raise ValueError("cookies.txt does not contain an Instagram sessionid")
+    output = ["# Netscape HTTP Cookie File", "# Stored by YT Studio"]
+    for domain, include_subdomains, path, secure, expires, name, value in rows:
+        output.append("\t".join([
+            domain,
+            include_subdomains or "TRUE",
+            path or "/",
+            secure or "TRUE",
+            expires or "0",
+            name,
+            value,
+        ]))
+    return "\n".join(output) + "\n"
 
 
 def validate_instagram_session(sessionid: str, csrftoken: str = "", ds_user_id: str = "") -> dict:
