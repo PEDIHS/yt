@@ -3,10 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-import random
 import time
-import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -16,7 +14,6 @@ from integrations import get_secret, resolve_instagram_cookie_blob, resolve_inst
 from models import InstagramDirectShare, TelegramAdmin, YouTubeChannel
 
 logger = logging.getLogger("instagram-direct")
-logging.getLogger("httpx").setLevel(logging.WARNING)
 
 POLL_SECONDS = 30
 INBOX_URLS = (
@@ -240,75 +237,6 @@ def _channel_buttons(share_id: int) -> list[list[dict]]:
         return rows
 
 
-def send_instagram_received_ack(thread_id: str, text: str = "دریافت شد") -> None:
-    thread_id = str(thread_id or "").strip()
-    if not thread_id:
-        raise ValueError("Instagram thread id is missing")
-
-    cookies = _cookies()
-    if not cookies.get("sessionid"):
-        raise RuntimeError("Instagram session is not configured")
-
-    mutation = str(random.randint(6800011111111111111, 6800099999999999999))
-    account_seed = (cookies.get("ds_user_id") or "yt-studio").encode("utf-8")
-    import hashlib
-    device_id = "android-" + hashlib.md5(account_seed).hexdigest()[:16]
-    stable_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"yt-studio-instagram-{cookies.get('ds_user_id','account')}"))
-    form = {
-        "action": "send_item",
-        "is_x_transport_forward": "false",
-        "send_silently": "false",
-        "is_shh_mode": "0",
-        "send_attribution": "message_button",
-        "client_context": mutation,
-        "device_id": device_id,
-        "mutation_token": mutation,
-        "_uuid": stable_uuid,
-        "_uid": cookies.get("ds_user_id", ""),
-        "_csrftoken": cookies.get("csrftoken", ""),
-        "btt_dual_send": "false",
-        "nav_chain": "1qT:feed_timeline:1,1qT:feed_timeline:2,1qT:feed_timeline:3,7Az:direct_inbox:4,7Az:direct_inbox:5,5rG:direct_thread:7",
-        "is_ae_dual_send": "false",
-        "offline_threading_id": mutation,
-        "thread_ids": json.dumps([int(thread_id)]),
-        "text": text,
-    }
-    headers = _headers(cookies)
-    last_error = ""
-    for url in (
-        "https://www.instagram.com/api/v1/direct_v2/threads/broadcast/text/",
-        "https://i.instagram.com/api/v1/direct_v2/threads/broadcast/text/",
-    ):
-        try:
-            response = httpx.post(
-                url,
-                data=form,
-                headers=headers,
-                cookies=cookies,
-                follow_redirects=False,
-                timeout=15,
-            )
-        except Exception as exc:
-            last_error = f"{type(exc).__name__}: {exc}"
-            continue
-
-        if response.status_code == 200:
-            try:
-                payload = response.json()
-            except ValueError:
-                payload = {}
-            if payload.get("status") in {None, "ok"}:
-                return
-            last_error = str(payload.get("message") or payload.get("status") or "Instagram rejected message")
-            continue
-        if response.status_code in {401, 403}:
-            last_error = f"HTTP {response.status_code}"
-            continue
-        last_error = f"HTTP {response.status_code}"
-
-    raise RuntimeError(f"Instagram Direct acknowledgement failed: {last_error or 'unknown error'}")
-
-
 def notify_pending_share(share_id: int) -> None:
     token = resolve_telegram_token()
     admin_id = _primary_admin_id()
@@ -374,13 +302,6 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
                 if exists:
                     continue
                 sender_id, sender_username = _sender_for_item(thread, item)
-                recent_duplicate = db.query(InstagramDirectShare.id).filter(
-                    InstagramDirectShare.media_url == media["url"],
-                    InstagramDirectShare.sender_id == sender_id[:128],
-                    InstagramDirectShare.detected_at >= datetime.utcnow() - timedelta(minutes=10),
-                ).first()
-                if recent_duplicate:
-                    continue
                 row = InstagramDirectShare(
                     item_key=item_key[:255],
                     thread_id=thread_id[:255],
@@ -402,14 +323,6 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
 
     if notify:
         for share_id in created_ids:
-            with SessionLocal() as db:
-                share = db.get(InstagramDirectShare, share_id)
-                thread_id = share.thread_id if share else ""
-            if thread_id:
-                try:
-                    send_instagram_received_ack(thread_id)
-                except Exception as exc:
-                    logger.warning("Instagram Direct acknowledgement failed for share %s: %s", share_id, exc)
             try:
                 notify_pending_share(share_id)
             except Exception:
