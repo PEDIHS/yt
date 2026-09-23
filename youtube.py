@@ -17,9 +17,15 @@ from models import YouTubeChannel
 from security import decrypt_secret, encrypt_secret
 
 logger = logging.getLogger("youtube")
+
+YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+YOUTUBE_READ_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
+YOUTUBE_ANALYTICS_SCOPE = "https://www.googleapis.com/auth/yt-analytics.readonly"
+
 SCOPES = [
-    "https://www.googleapis.com/auth/youtube.upload",
-    "https://www.googleapis.com/auth/youtube.readonly",
+    YOUTUBE_UPLOAD_SCOPE,
+    YOUTUBE_READ_SCOPE,
+    YOUTUBE_ANALYTICS_SCOPE,
 ]
 
 
@@ -39,12 +45,16 @@ def build_authorization_url(redirect_uri: str) -> tuple[str, str]:
     return url, state
 
 
-def _service_from_credentials(credentials: Credentials):
+def youtube_data_service(credentials: Credentials):
     return build("youtube", "v3", credentials=credentials, cache_discovery=False)
 
 
+def youtube_analytics_service(credentials: Credentials):
+    return build("youtubeAnalytics", "v2", credentials=credentials, cache_discovery=False)
+
+
 def _channel_payload(service) -> dict:
-    response = service.channels().list(part="snippet,statistics,status", mine=True).execute()
+    response = service.channels().list(part="snippet,statistics,status,contentDetails", mine=True).execute()
     items = response.get("items", [])
     if not items:
         raise RuntimeError("No YouTube channel is available for this Google account")
@@ -62,13 +72,15 @@ def _channel_payload(service) -> dict:
         "subscriber_count": int(stats.get("subscriberCount", 0) or 0),
         "view_count": int(stats.get("viewCount", 0) or 0),
         "video_count": int(stats.get("videoCount", 0) or 0),
+        "uploads_playlist_id": item.get("contentDetails", {}).get("relatedPlaylists", {}).get("uploads") or "",
     }
 
 
 def connect_channel(credentials: Credentials, label: str) -> YouTubeChannel:
-    service = _service_from_credentials(credentials)
+    service = youtube_data_service(credentials)
     payload = _channel_payload(service)
     token_encrypted = encrypt_secret(credentials.to_json())
+    channel_values = {k: v for k, v in payload.items() if k != "uploads_playlist_id"}
 
     with SessionLocal() as db:
         channel = db.query(YouTubeChannel).filter_by(youtube_channel_id=payload["youtube_channel_id"]).one_or_none()
@@ -78,7 +90,7 @@ def connect_channel(credentials: Credentials, label: str) -> YouTubeChannel:
                 token_encrypted=token_encrypted,
                 default_hashtags=Config.DEFAULT_HASHTAGS,
                 default_privacy="public",
-                **payload,
+                **channel_values,
             )
             db.add(channel)
         else:
@@ -98,9 +110,10 @@ def connect_channel(credentials: Credentials, label: str) -> YouTubeChannel:
         return channel
 
 
-def _credentials_for_channel(db, channel: YouTubeChannel) -> Credentials:
+def credentials_for_channel(db, channel: YouTubeChannel) -> Credentials:
     info = json.loads(decrypt_secret(channel.token_encrypted))
-    creds = Credentials.from_authorized_user_info(info, SCOPES)
+    stored_scopes = info.get("scopes") or SCOPES
+    creds = Credentials.from_authorized_user_info(info, stored_scopes)
     if creds.expired and creds.refresh_token:
         creds.refresh(GoogleRequest())
         channel.token_encrypted = encrypt_secret(creds.to_json())
@@ -111,13 +124,34 @@ def _credentials_for_channel(db, channel: YouTubeChannel) -> Credentials:
     return creds
 
 
+def granted_scopes(credentials: Credentials) -> set[str]:
+    scopes = set(credentials.scopes or [])
+    scopes.update(credentials.granted_scopes or [])
+    return scopes
+
+
+def channel_authorization_state(channel_id: int) -> dict:
+    with SessionLocal() as db:
+        channel = db.get(YouTubeChannel, channel_id)
+        if not channel:
+            raise RuntimeError("Channel not found")
+        creds = credentials_for_channel(db, channel)
+        scopes = granted_scopes(creds)
+        return {
+            "upload": YOUTUBE_UPLOAD_SCOPE in scopes,
+            "read": YOUTUBE_READ_SCOPE in scopes,
+            "analytics": YOUTUBE_ANALYTICS_SCOPE in scopes,
+            "scopes": sorted(scopes),
+        }
+
+
 def refresh_channel(channel_id: int) -> YouTubeChannel:
     with SessionLocal() as db:
         channel = db.get(YouTubeChannel, channel_id)
         if not channel:
             raise RuntimeError("Channel not found")
-        creds = _credentials_for_channel(db, channel)
-        payload = _channel_payload(_service_from_credentials(creds))
+        creds = credentials_for_channel(db, channel)
+        payload = _channel_payload(youtube_data_service(creds))
         channel.title = payload["title"]
         channel.custom_url = payload["custom_url"]
         channel.description = payload["description"]
@@ -146,15 +180,17 @@ def upload_to_youtube(
         if not channel.is_active:
             raise RuntimeError("Channel is disabled")
 
-        creds = _credentials_for_channel(db, channel)
-        service = _service_from_credentials(creds)
+        creds = credentials_for_channel(db, channel)
+        service = youtube_data_service(creds)
         effective_privacy = privacy or channel.default_privacy
         if effective_privacy not in {"public", "unlisted", "private"}:
             effective_privacy = "public"
 
         final_title = (title or "YouTube Shorts").strip()
         full_title = f"{final_title} {hashtags}".strip()[:100]
-        full_description = "\n\n".join(x for x in [description.strip(), hashtags.strip(), "#Shorts"] if x).strip()
+        full_description = "\n\n".join(
+            x for x in [description.strip(), hashtags.strip(), "#Shorts"] if x
+        ).strip()
 
         body = {
             "snippet": {
