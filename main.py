@@ -1315,15 +1315,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _run_job_and_notify(context: ContextTypes.DEFAULT_TYPE, chat_id: int, job_id: int):
-    result = await asyncio.to_thread(process_job, job_id)
-    if result.get("success"):
-        await safe_send(
-            context,
-            chat_id,
-            f"✅ آپلود کامل شد.\n📺 {result.get('channel_title')}\n🔗 {result.get('video_url')}\n🔐 {result.get('privacy')}",
-        )
-    else:
-        await safe_send(context, chat_id, f"❌ Job #{job_id} ناموفق بود:\n{result.get('error')}")
+    # Lifecycle messages are emitted centrally from jobs.process_job so all
+    # sources (Telegram, panel, Instagram Direct and scheduler) behave alike.
+    await asyncio.to_thread(process_job, job_id)
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
