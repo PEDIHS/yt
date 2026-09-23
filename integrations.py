@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import json
 import secrets
 from datetime import datetime, timedelta
@@ -96,6 +97,57 @@ def claim_telegram_admin(user_id: int, code: str) -> bool:
     delete_secret("telegram_claim_hash")
     delete_secret("telegram_claim_expires")
     return True
+
+
+def resolve_instagram_session() -> str:
+    return get_secret("instagram_sessionid") or os.getenv("INSTAGRAM_SESSIONID", "").strip()
+
+
+def instagram_status() -> dict:
+    sessionid = resolve_instagram_session()
+    return {
+        "configured": bool(sessionid),
+        "username": get_secret("instagram_username"),
+        "user_id": get_secret("instagram_user_id"),
+    }
+
+
+def validate_instagram_session(sessionid: str) -> dict:
+    sessionid = sessionid.strip()
+    if not sessionid:
+        raise ValueError("Instagram sessionid is empty")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "X-IG-App-ID": "936619743392459",
+        "Referer": "https://www.instagram.com/accounts/edit/",
+    }
+
+    response = httpx.get(
+        "https://www.instagram.com/api/v1/accounts/current_user/?edit=true",
+        headers=headers,
+        cookies={"sessionid": sessionid},
+        follow_redirects=True,
+        timeout=15,
+    )
+    if response.status_code in {401, 403}:
+        raise ValueError("Instagram session is expired or invalid")
+    if response.status_code != 200:
+        raise ValueError(f"Instagram session check failed with HTTP {response.status_code}")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ValueError("Instagram did not return account information") from exc
+
+    user = payload.get("user") or {}
+    username = (user.get("username") or "").strip()
+    user_id = str(user.get("pk") or user.get("id") or "").strip()
+    if not username:
+        raise ValueError("Instagram session is not authenticated")
+
+    return {"username": username, "user_id": user_id}
 
 
 def validate_telegram_token(token: str) -> dict:
