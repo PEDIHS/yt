@@ -3,7 +3,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -1152,14 +1152,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/connect · /toggle id · /setprivacy id ... · /sethashtags id ...\n\n"
         "✨ انتشار هوشمند\n"
         "/smart · /peaks [id] · /autopost id on|off · /perday id N\n"
-        "/queue [id] · /publishnow JOB_ID · /canceljob JOB_ID\n\n"
+        "/timezone id Asia/Tehran · /gap id MIN · /slots id 12,18,21\n"
+        "/queue [id] · /schedulejob JOB_ID YYYY-MM-DDTHH:MM · /publishnow JOB_ID · /canceljob JOB_ID\n\n"
         "🎬 مدیریت ویدیو\n"
         "/videos [id] · /video VIDEO_ID · /videoprivacy VIDEO_ID public|unlisted|private\n"
         "/videotitle VIDEO_ID title · /videodesc VIDEO_ID description · /videotags VIDEO_ID tag1,tag2\n"
+        "/videokids VIDEO_ID on|off · /videoembed VIDEO_ID on|off · /videocategory VIDEO_ID ID\n"
         "/deletevideo VIDEO_ID · /thumbnail VIDEO_ID\n\n"
         "💬 Comments / Captions / Playlist\n"
-        "/comments VIDEO_ID · /reply VIDEO_ID COMMENT_ID text · /deletecomment VIDEO_ID COMMENT_ID\n"
-        "/caption VIDEO_ID fa Name · /playlists · /newplaylist private Title · /addplaylist VIDEO_ID PLAYLIST_ID\n\n"
+        "/comments VIDEO_ID · /held VIDEO_ID · /moderate VIDEO_ID COMMENT_ID approve|reject [ban]\n"
+        "/reply VIDEO_ID COMMENT_ID text · /deletecomment VIDEO_ID COMMENT_ID\n"
+        "/captions VIDEO_ID · /caption VIDEO_ID fa Name · /deletecaption VIDEO_ID CAPTION_ID\n"
+        "/playlists · /newplaylist private Title · /editplaylist PLAYLIST_ID private Title\n"
+        "/addplaylist VIDEO_ID PLAYLIST_ID · /deleteplaylist PLAYLIST_ID\n\n"
         "/uploads · /cancel"
     )
 
@@ -1350,6 +1355,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("✅ ویدیو از YouTube حذف شد.")
         except Exception as exc:
             await query.message.reply_text(f"❌ {exc}")
+    elif data.startswith("delpl:"):
+        _, raw_channel, playlist_id = data.split(":", 2)
+        try:
+            await asyncio.to_thread(delete_playlist, int(raw_channel), playlist_id)
+            await query.message.reply_text("✅ Playlist حذف شد. خود ویدیوها باقی ماندند.")
+        except Exception as exc:
+            await query.message.reply_text(f"❌ {exc}")
     elif data.startswith("select:"):
         try:
             channel_id = int(data.split(":", 1)[1])
@@ -1370,6 +1382,29 @@ async def error_handler(_update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Telegram handler error", exc_info=context.error)
 
 
+async def _post_init(application: Application) -> None:
+    commands = [
+        BotCommand("start", "منوی اصلی مدیریت"),
+        BotCommand("channels", "لیست و انتخاب کانال"),
+        BotCommand("stats", "آمار کانال انتخاب‌شده"),
+        BotCommand("smart", "وضعیت انتشار هوشمند"),
+        BotCommand("queue", "صف ویدیوهای در انتظار"),
+        BotCommand("videos", "آخرین ویدیوهای کانال"),
+        BotCommand("uploads", "آخرین Jobها"),
+        BotCommand("peaks", "تحلیل ساعات پیک"),
+        BotCommand("autopost", "روشن/خاموش Auto Publisher"),
+        BotCommand("perday", "تعداد ویدیو روزانه"),
+        BotCommand("video", "مدیریت یک ویدیو"),
+        BotCommand("comments", "کامنت‌های ویدیو"),
+        BotCommand("playlists", "لیست Playlistها"),
+        BotCommand("thumbnail", "تغییر Thumbnail"),
+        BotCommand("caption", "آپلود Caption"),
+        BotCommand("connect", "اتصال کانال جدید"),
+        BotCommand("help", "راهنمای کامل دستورات"),
+    ]
+    await application.bot.set_my_commands(commands)
+
+
 def run_bot() -> None:
     init_db()
     token = resolve_telegram_token()
@@ -1378,7 +1413,7 @@ def run_bot() -> None:
         time.sleep(10)
         token = resolve_telegram_token()
 
-    app = Application.builder().token(token).build()
+    app = Application.builder().token(token).post_init(_post_init).build()
     app.add_handler(CommandHandler("claim", claim_command))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
@@ -1394,25 +1429,38 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("smart", smart_command))
     app.add_handler(CommandHandler("autopost", autopost_command))
     app.add_handler(CommandHandler("perday", perday_command))
+    app.add_handler(CommandHandler("timezone", timezone_command))
+    app.add_handler(CommandHandler("gap", gap_command))
+    app.add_handler(CommandHandler("slots", slots_command))
     app.add_handler(CommandHandler("peaks", peaks_command))
     app.add_handler(CommandHandler("queue", queue_command))
     app.add_handler(CommandHandler("publishnow", publishnow_command))
     app.add_handler(CommandHandler("canceljob", canceljob_command))
+    app.add_handler(CommandHandler("schedulejob", schedulejob_command))
     app.add_handler(CommandHandler("videos", videos_command))
     app.add_handler(CommandHandler("video", video_command))
     app.add_handler(CommandHandler("videoprivacy", videoprivacy_command))
     app.add_handler(CommandHandler("videotitle", videotitle_command))
     app.add_handler(CommandHandler("videodesc", videodesc_command))
     app.add_handler(CommandHandler("videotags", videotags_command))
+    app.add_handler(CommandHandler("videokids", videokids_command))
+    app.add_handler(CommandHandler("videoembed", videoembed_command))
+    app.add_handler(CommandHandler("videocategory", videocategory_command))
     app.add_handler(CommandHandler("deletevideo", deletevideo_command))
     app.add_handler(CommandHandler("comments", comments_command))
+    app.add_handler(CommandHandler("held", held_command))
+    app.add_handler(CommandHandler("moderate", moderate_command))
     app.add_handler(CommandHandler("reply", reply_command))
     app.add_handler(CommandHandler("deletecomment", deletecomment_command))
     app.add_handler(CommandHandler("playlists", playlists_command))
     app.add_handler(CommandHandler("newplaylist", newplaylist_command))
     app.add_handler(CommandHandler("addplaylist", addplaylist_command))
+    app.add_handler(CommandHandler("editplaylist", editplaylist_command))
+    app.add_handler(CommandHandler("deleteplaylist", deleteplaylist_command))
     app.add_handler(CommandHandler("thumbnail", thumbnail_command))
+    app.add_handler(CommandHandler("captions", captions_command))
     app.add_handler(CommandHandler("caption", caption_command))
+    app.add_handler(CommandHandler("deletecaption", deletecaption_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler((filters.PHOTO | filters.Document.ALL), handle_media))
