@@ -18,7 +18,7 @@ from analytics import (
 from config import Config
 from db import SessionLocal, init_db
 from downloader import is_supported_instagram_url
-from jobs import create_job, enqueue_job
+from jobs import create_job, enqueue_job, mark_job_failed
 from publishing import (
     analyze_peak_slots,
     cancel_scheduled_job,
@@ -1046,6 +1046,7 @@ def publishing_bulk_queue(channel_id: int):
         if not title:
             errors.append(f"خط {index}: عنوان خالی است")
             continue
+        job = None
         try:
             job = create_job(
                 channel_id=channel_id,
@@ -1056,6 +1057,8 @@ def publishing_bulk_queue(channel_id: int):
             schedule_job_smart(job.id)
             created += 1
         except Exception as exc:
+            if job is not None:
+                mark_job_failed(job.id, f"Scheduling failed: {exc}")
             errors.append(f"خط {index}: {exc}")
     if created:
         flash(f"{created} ویدیو وارد صف انتشار هوشمند شد.", "success")
@@ -1115,6 +1118,7 @@ def upload():
         elif not title:
             flash("عنوان الزامی است.", "danger")
         else:
+            job = None
             try:
                 job = create_job(
                     channel_id=channel_id,
@@ -1149,6 +1153,8 @@ def upload():
                 flash(f"Job #{job.id} وارد صف انتشار فوری شد.", "success")
                 return redirect(url_for("jobs"))
             except Exception as exc:
+                if job is not None:
+                    mark_job_failed(job.id, f"Scheduling failed: {exc}")
                 flash(f"ثبت ارسال ناموفق بود: {exc}", "danger")
     return render_template("upload.html", channels=channels_list)
 
