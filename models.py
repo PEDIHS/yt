@@ -167,3 +167,33 @@ class UploadSchedule(Base):
     reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     released_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class InstagramDirectShare(Base):
+    __tablename__ = "instagram_direct_shares"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_key: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    thread_id: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    item_id: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    sender_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    sender_username: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    media_url: Mapped[str] = mapped_column(Text, nullable=False)
+    media_type: Mapped[str] = mapped_column(String(30), default="post", nullable=False)
+    title_hint: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    thumbnail_url: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    raw_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+
+    status: Mapped[str] = mapped_column(String(30), default="pending_channel", index=True, nullable=False)
+    selected_channel_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("youtube_channels.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    telegram_message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    upload_job_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("upload_jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    detected_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    selected_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
