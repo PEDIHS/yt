@@ -123,10 +123,34 @@
   </article>
 </section>
 
+<section class="dashboard-audience-block">
+  <div class="section-title-row">
+    <div><span class="section-kicker">AUDIENCE INTELLIGENCE</span><h2>تحلیل حرفه‌ای مخاطب</h2><p>تجمیع Traffic Source، Device و Geography همه کانال‌های Sync‌شده.</p></div>
+    <a class="btn btn-soft" href="{{ url_for('videos_manager') }}"><i data-lucide="clapperboard"></i> Content Manager</a>
+  </div>
+  <div class="audience-insights-grid">
+    <article class="glass-card chart-card">
+      <div class="card-heading"><div><span class="section-kicker">DISCOVERY</span><h2>منابع ورودی</h2><p>مهم‌ترین مسیرهای جذب View</p></div><span class="data-chip"><i data-lucide="route"></i>Traffic</span></div>
+      <div id="dashboardTrafficChart" class="chart chart-md"></div>
+    </article>
+    <article class="glass-card chart-card">
+      <div class="card-heading"><div><span class="section-kicker">DEVICE MIX</span><h2>نوع دستگاه</h2><p>سهم دستگاه‌های مخاطبان</p></div><span class="data-chip"><i data-lucide="smartphone"></i>Device</span></div>
+      <div id="dashboardDeviceChart" class="chart chart-md"></div>
+    </article>
+    <article class="glass-card chart-card">
+      <div class="card-heading"><div><span class="section-kicker">TOP GEO</span><h2>کشورهای برتر</h2><p>بیشترین بازدید تجمیعی</p></div><span class="data-chip"><i data-lucide="globe-2"></i>Geo</span></div>
+      <div id="dashboardCountriesChart" class="chart chart-md"></div>
+    </article>
+  </div>
+</section>
+
 <section class="section-block">
   <div class="section-title-row">
     <div><span class="section-kicker">Connected Channels</span><h2>داشبورد هر کانال</h2><p>آمار اصلی و وضعیت اتصال هر کانال در یک نگاه</p></div>
-    <a class="btn btn-soft" href="{{ url_for('channels') }}"><i data-lucide="settings-2"></i> مدیریت کانال‌ها</a>
+    <div class="toolbar-actions">
+      <a class="btn btn-soft" href="{{ url_for('videos_manager') }}"><i data-lucide="clapperboard"></i> ویدیوها</a>
+      <a class="btn btn-soft" href="{{ url_for('channels') }}"><i data-lucide="settings-2"></i> کانال‌ها</a>
+    </div>
   </div>
 
   <div class="channel-performance-grid">
@@ -201,4 +225,5 @@
 
 <script id="global-chart-data" type="application/json">{{ global_chart|tojson }}</script>
 <script id="channel-distribution-data" type="application/json">{{ distribution|tojson }}</script>
+<script id="global-audience-data" type="application/json">{{ audience_rollup|tojson }}</script>
 {% endblock %}
