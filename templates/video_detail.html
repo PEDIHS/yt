@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}{{ video.title }} | Video Studio{% endblock %}
+{% block eyebrow %}Video Studio{% endblock %}
+{% block heading %}مدیریت ویدیو{% endblock %}
+{% block subheading %}Metadata، Thumbnail، Playlist، Comments، Captions و حذف دائمی{% endblock %}
+
+{% block content %}
+<section class="video-studio-hero glass-card">
+  <div class="video-studio-preview">
+    {% if video.thumbnail_url %}<img src="{{ video.thumbnail_url }}" alt="{{ video.title }}">{% endif %}
+    <span class="video-duration">{{ duration(video.duration_seconds) }}</span>
+  </div>
+  <div class="video-studio-info grow">
+    <div class="video-studio-kicker">
+      <span class="scope-badge {{ 'ok' if video.privacy == 'public' else 'warn' }}"><i data-lucide="globe-2"></i>{{ video.privacy }}</span>
+      <span class="data-chip">{{ video.definition|upper }}</span>
+      {% if video.caption %}<span class="data-chip chip-success"><i data-lucide="captions"></i>Caption</span>{% endif %}
+    </div>
+    <h2>{{ video.title }}</h2>
+    <p>{{ video.description[:240] }}{% if video.description|length > 240 %}…{% endif %}</p>
+    <div class="video-studio-stats">
+      <div><span>Views</span><strong>{{ compact_number(video.views) }}</strong></div>
+      <div><span>Likes</span><strong>{{ compact_number(video.likes) }}</strong></div>
+      <div><span>Comments</span><strong>{{ compact_number(video.comments) }}</strong></div>
+      <div><span>Published</span><strong>{{ video.published_at[:10] }}</strong></div>
+    </div>
+  </div>
+  <div class="video-studio-actions">
+    <a class="btn btn-primary" href="{{ video.url }}" target="_blank" rel="noopener"><i data-lucide="youtube"></i> مشاهده ویدیو</a>
+    <a class="btn btn-soft" href="https://studio.youtube.com/video/{{ video.video_id }}/edit" target="_blank" rel="noopener"><i data-lucide="external-link"></i> YouTube Studio</a>
+    <a class="btn btn-ghost" href="{{ url_for('videos_manager', channel_id=channel.id) }}"><i data-lucide="arrow-right"></i> همه ویدیوها</a>
+  </div>
+</section>
+
+{% if not authorization.manage or not authorization.force_ssl %}
+<section class="notice-card">
+  <div class="notice-icon"><i data-lucide="key-round"></i></div>
+  <div class="grow"><strong>برای همه ابزارهای مدیریت یک Reconnect لازم است.</strong><p>Scopeهای مدیریت Video/Comment/Caption در OAuth فعلی کامل نیست.</p></div>
+  <form method="post" action="{{ url_for('channels_connect') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="label" value="{{ channel.label }}"><button class="btn btn-primary">Reconnect</button></form>
+</section>
+{% endif %}
+
+<div class="video-studio-layout">
+  <main class="video-studio-main">
+    <section class="glass-card studio-section">
+      <div class="studio-section-head">
+        <div><span class="section-kicker">VIDEO DETAILS</span><h2>اطلاعات و تنظیمات ویدیو</h2><p>تغییرات بعد از ذخیره مستقیماً روی YouTube اعمال می‌شوند.</p></div>
+        <i data-lucide="square-pen"></i>
+      </div>
+      <form method="post" action="{{ url_for('video_edit', channel_id=channel.id, video_id=video.video_id) }}" class="studio-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="span-2">عنوان
+          <input name="title" value="{{ video.title }}" maxlength="100" required>
+          <span class="hint">حداکثر ۱۰۰ کاراکتر</span>
+        </label>
+        <label class="span-2">توضیحات
+          <textarea name="description" rows="8" maxlength="5000">{{ video.description }}</textarea>
+        </label>
+        <label class="span-2">Tags
+          <textarea name="tags" rows="3" placeholder="tag1, tag2, tag3">{{ video.tags|join(', ') }}</textarea>
+        </label>
+        <label>Privacy
+          <select name="privacy">{% for p in ['public','unlisted','private'] %}<option value="{{ p }}" {% if video.privacy == p %}selected{% endif %}>{{ p|capitalize }}</option>{% endfor %}</select>
+        </label>
+        <label>Category ID
+          <input name="category_id" value="{{ video.category_id }}" inputmode="numeric">
+        </label>
+        <label class="toggle-row"><input type="checkbox" name="made_for_kids" {% if video.made_for_kids %}checked{% endif %}><span><strong>Made for Kids</strong><small>تنظیم مخاطب کودک</small></span></label>
+        <label class="toggle-row"><input type="checkbox" name="embeddable" {% if video.embeddable %}checked{% endif %}><span><strong>Allow Embed</strong><small>اجازه نمایش ویدیو در سایت‌ها</small></span></label>
+        <div class="span-2 form-actions"><button class="btn btn-primary"><i data-lucide="save"></i> ذخیره روی YouTube</button></div>
+      </form>
+    </section>
+
+    <section class="glass-card studio-section">
+      <div class="studio-section-head">
+        <div><span class="section-kicker">COMMENT CENTER</span><h2>مدیریت Comments</h2><p>پاسخ، تأیید، رد و حذف Commentها.</p></div>
+        <i data-lucide="messages-square"></i>
+      </div>
+
+      {% if page_errors.comments %}<div class="mini-warning"><i data-lucide="info"></i><span>{{ page_errors.comments }}</span></div>{% endif %}
+
+      {% if held_comments %}
+      <div class="comment-group-title"><span>در انتظار بررسی</span><span class="status-pill status-queued">{{ held_comments|length }}</span></div>
+      <div class="comment-list">
+        {% for comment in held_comments %}
+        <article class="comment-card held">
+          <div class="comment-author">{% if comment.author_avatar %}<img src="{{ comment.author_avatar }}" alt="">{% endif %}<div><strong>{{ comment.author }}</strong><small>{{ comment.published_at[:16].replace('T',' ') }}</small></div></div>
+          <p>{{ comment.text }}</p>
+          <div class="comment-actions">
+            <form method="post" action="{{ url_for('video_comment_moderate', channel_id=channel.id, video_id=video.video_id, comment_id=comment.comment_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="status" value="published"><button class="btn btn-soft"><i data-lucide="check"></i> تأیید</button></form>
+            <form method="post" action="{{ url_for('video_comment_moderate', channel_id=channel.id, video_id=video.video_id, comment_id=comment.comment_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="status" value="rejected"><button class="btn btn-danger"><i data-lucide="x"></i> رد</button></form>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="comment-group-title"><span>منتشرشده</span><span class="data-chip">{{ comments|length }}</span></div>
+      <div class="comment-list">
+        {% for comment in comments %}
+        <article class="comment-card">
+          <div class="comment-author">{% if comment.author_avatar %}<img src="{{ comment.author_avatar }}" alt="">{% endif %}<div><strong>{{ comment.author }}</strong><small>{{ comment.published_at[:16].replace('T',' ') }} · {{ comment.like_count }} likes</small></div></div>
+          <p>{{ comment.text }}</p>
+          <details class="comment-reply">
+            <summary class="btn btn-soft"><i data-lucide="reply"></i> پاسخ</summary>
+            <form method="post" action="{{ url_for('video_comment_reply', channel_id=channel.id, video_id=video.video_id, comment_id=comment.comment_id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><textarea name="text" rows="3" placeholder="پاسخ..." required></textarea><button class="btn btn-primary">ارسال پاسخ</button>
+            </form>
+          </details>
+          <form class="comment-delete" method="post" action="{{ url_for('video_comment_delete', channel_id=channel.id, video_id=video.video_id, comment_id=comment.comment_id) }}" onsubmit="return confirm('این Comment حذف شود؟')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="icon-btn danger"><i data-lucide="trash-2"></i></button></form>
+        </article>
+        {% else %}
+        <div class="studio-empty"><i data-lucide="message-circle-off"></i><span>Comment منتشرشده‌ای پیدا نشد.</span></div>
+        {% endfor %}
+      </div>
+    </section>
+  </main>
+
+  <aside class="video-studio-side">
+    <section class="glass-card studio-section">
+      <div class="studio-section-head compact"><div><span class="section-kicker">THUMBNAIL</span><h2>تصویر ویدیو</h2></div><i data-lucide="image"></i></div>
+      {% if video.thumbnail_url %}<img class="studio-thumbnail-current" src="{{ video.thumbnail_url }}" alt="{{ video.title }}">{% endif %}
+      <form method="post" action="{{ url_for('video_thumbnail', channel_id=channel.id, video_id=video.video_id) }}" enctype="multipart/form-data" class="form-grid one">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>JPEG / PNG<input type="file" name="thumbnail" accept="image/jpeg,image/png" required></label>
+        <button class="btn btn-primary"><i data-lucide="image-up"></i> تغییر Thumbnail</button>
+      </form>
+    </section>
+
+    <section class="glass-card studio-section">
+      <div class="studio-section-head compact"><div><span class="section-kicker">PLAYLIST</span><h2>افزودن به Playlist</h2></div><i data-lucide="list-plus"></i></div>
+      {% if playlists %}
+      <form method="post" action="{{ url_for('video_playlist_add', channel_id=channel.id, video_id=video.video_id) }}" class="form-grid one">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>Playlist<select name="playlist_id">{% for playlist in playlists %}<option value="{{ playlist.playlist_id }}">{{ playlist.title }}</option>{% endfor %}</select></label>
+        <button class="btn btn-soft"><i data-lucide="plus"></i> اضافه کردن</button>
+      </form>
+      {% else %}<div class="studio-empty"><span>Playlistی وجود ندارد.</span></div>{% endif %}
+    </section>
+
+    <section class="glass-card studio-section">
+      <div class="studio-section-head compact"><div><span class="section-kicker">CAPTIONS</span><h2>زیرنویس‌ها</h2></div><i data-lucide="captions"></i></div>
+      {% if page_errors.captions %}<div class="mini-warning"><span>{{ page_errors.captions }}</span></div>{% endif %}
+      <div class="caption-list">
+        {% for caption in captions %}
+        <div class="caption-item"><div class="grow"><strong>{{ caption.name }}</strong><small>{{ caption.language }} · {{ caption.status or caption.track_kind }}</small></div><form method="post" action="{{ url_for('video_caption_delete', channel_id=channel.id, video_id=video.video_id, caption_id=caption.caption_id) }}" onsubmit="return confirm('Caption حذف شود؟')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="icon-btn danger"><i data-lucide="trash-2"></i></button></form></div>
+        {% else %}<div class="studio-empty"><span>Caption دستی وجود ندارد.</span></div>{% endfor %}
+      </div>
+      <details class="manager-create-panel">
+        <summary class="btn btn-soft"><i data-lucide="upload"></i> آپلود Caption</summary>
+        <form method="post" action="{{ url_for('video_caption_upload', channel_id=channel.id, video_id=video.video_id) }}" enctype="multipart/form-data" class="form-grid one">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label>فایل Caption<input type="file" name="caption_file" required></label>
+          <label>Language Code<input name="language" placeholder="fa یا en" maxlength="20" required></label>
+          <label>نام Track<input name="name" placeholder="Persian" maxlength="150" required></label>
+          <label class="toggle-row"><input type="checkbox" name="is_draft"><span><strong>Draft</strong><small>فعلاً منتشر نشود</small></span></label>
+          <button class="btn btn-primary">آپلود</button>
+        </form>
+      </details>
+    </section>
+
+    <section class="glass-card studio-section unsupported-tools">
+      <div class="studio-section-head compact"><div><span class="section-kicker">STUDIO-ONLY</span><h2>ابزارهای داخل YouTube Studio</h2></div><i data-lucide="scissors"></i></div>
+      <p>Trim/Cut Editor، End Screen، Cards و برخی تنظیمات Monetization/Copyright در API عمومی کامل در دسترس نیستند.</p>
+      <a class="btn btn-soft" href="https://studio.youtube.com/video/{{ video.video_id }}/edit" target="_blank" rel="noopener"><i data-lucide="external-link"></i> باز کردن Editor رسمی</a>
+    </section>
+
+    <section class="glass-card studio-section danger-studio">
+      <div class="studio-section-head compact"><div><span class="section-kicker">DANGER ZONE</span><h2>حذف دائمی ویدیو</h2></div><i data-lucide="trash-2"></i></div>
+      <p>این عملیات قابل بازگشت نیست و ویدیو را از YouTube حذف می‌کند.</p>
+      <form method="post" action="{{ url_for('video_delete', channel_id=channel.id, video_id=video.video_id) }}" onsubmit="return confirm('ویدیو برای همیشه از YouTube حذف شود؟')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>برای تأیید بنویس DELETE<input name="confirmation" autocomplete="off" required></label>
+        <button class="btn btn-danger"><i data-lucide="trash-2"></i> حذف دائمی ویدیو</button>
+      </form>
+    </section>
+  </aside>
+</div>
+{% endblock %}
