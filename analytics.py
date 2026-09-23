@@ -170,6 +170,8 @@ def sync_channel_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
     days = normalize_period(days)
     end_date = date.today() - timedelta(days=1)
     start_date = end_date - timedelta(days=days - 1)
+    previous_end_date = start_date - timedelta(days=1)
+    previous_start_date = previous_end_date - timedelta(days=days - 1)
 
     with SessionLocal() as db:
         channel = db.get(YouTubeChannel, channel_id)
@@ -219,6 +221,30 @@ def sync_channel_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
         summary_rows = _rows_as_dict(summary_response)
         summary = _summary_from_row(summary_rows[0] if summary_rows else None)
 
+        previous_response = analytics_service.reports().query(
+            ids="channel==MINE",
+            startDate=previous_start_date.isoformat(),
+            endDate=previous_end_date.isoformat(),
+            metrics=DAILY_METRICS,
+        ).execute()
+        previous_rows = _rows_as_dict(previous_response)
+        previous_summary = _summary_from_row(previous_rows[0] if previous_rows else None)
+
+        def percent_change(current: int | float, previous: int | float):
+            previous = float(previous or 0)
+            if previous == 0:
+                return None
+            return round(((float(current or 0) - previous) / abs(previous)) * 100, 1)
+
+        changes = {
+            "views": percent_change(summary["views"], previous_summary["views"]),
+            "likes": percent_change(summary["likes"], previous_summary["likes"]),
+            "comments": percent_change(summary["comments"], previous_summary["comments"]),
+            "shares": percent_change(summary["shares"], previous_summary["shares"]),
+            "watch_minutes": percent_change(summary["watch_minutes"], previous_summary["watch_minutes"]),
+            "subscribers_net_delta": summary["subscribers_net"] - previous_summary["subscribers_net"],
+        }
+
         top_response = analytics_service.reports().query(
             **common,
             metrics=TOP_VIDEO_METRICS,
@@ -232,12 +258,16 @@ def sync_channel_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
         top_ids = [str(row.get("video") or "") for row in top_rows]
         video_details = _load_video_details(data_service, top_ids + latest_ids)
 
+        rows_by_day = {str(row.get("day") or ""): row for row in daily_rows}
         daily = []
-        for row in daily_rows:
+        cursor = start_date
+        while cursor <= end_date:
+            day_key = cursor.isoformat()
+            row = rows_by_day.get(day_key, {})
             gained = _safe_int(row.get("subscribersGained"))
             lost = _safe_int(row.get("subscribersLost"))
             daily.append({
-                "date": str(row.get("day") or ""),
+                "date": day_key,
                 "views": _safe_int(row.get("views")),
                 "likes": _safe_int(row.get("likes")),
                 "comments": _safe_int(row.get("comments")),
@@ -248,6 +278,7 @@ def sync_channel_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
                 "watch_minutes": _safe_int(row.get("estimatedMinutesWatched")),
                 "average_view_duration": round(_safe_float(row.get("averageViewDuration")), 2),
             })
+            cursor += timedelta(days=1)
 
         top_videos = []
         for row in top_rows:
@@ -274,6 +305,8 @@ def sync_channel_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
             "end_date": end_date.isoformat(),
             "fetched_at": datetime.utcnow().isoformat(),
             "summary": summary,
+            "previous_summary": previous_summary,
+            "changes": changes,
             "daily": daily,
             "top_videos": top_videos,
             "latest_videos": latest_videos,
