@@ -79,6 +79,7 @@
 </section>
 
 {% if analytics %}
+{% set audience = analytics.get('audience', {}) %}
 <section class="analytics-layout channel-chart-layout">
   <article class="glass-card chart-card chart-card-main">
     <div class="card-heading">
@@ -123,7 +124,7 @@
   <article class="glass-card audience-summary-card">
     <div><span class="section-kicker">SUBSCRIBED STATUS</span><h3>Subscriber vs Non-subscriber</h3></div>
     <div class="audience-mini-list">
-      {% for item in analytics.audience.subscribed_status %}
+      {% for item in audience.get('subscribed_status', []) %}
       <div><span>{{ item.status }}</span><strong>{{ compact_number(item.views) }}</strong><small>Views</small></div>
       {% else %}<div><span>داده کافی نیست</span><strong>—</strong></div>{% endfor %}
     </div>
@@ -131,7 +132,7 @@
   <article class="glass-card audience-summary-card">
     <div><span class="section-kicker">CONTENT TYPE</span><h3>نوع محتوای پربازدید</h3></div>
     <div class="audience-mini-list">
-      {% for item in analytics.audience.content_types %}
+      {% for item in audience.get('content_types', []) %}
       <div><span>{{ item.type }}</span><strong>{{ compact_number(item.views) }}</strong><small>Views</small></div>
       {% else %}<div><span>داده کافی نیست</span><strong>—</strong></div>{% endfor %}
     </div>
