@@ -39,6 +39,7 @@ from integrations import (
     get_secret,
     google_oauth_status,
     instagram_status,
+    normalize_instagram_cookie_blob,
     parse_instagram_cookie_blob,
     save_google_web_client,
     validate_instagram_session,
@@ -416,15 +417,17 @@ def integrations_instagram():
     uploaded = request.files.get("cookies_file")
 
     try:
+        uploaded_cookie_blob = ""
         if uploaded and uploaded.filename:
             raw = uploaded.read(256 * 1024).decode("utf-8", errors="strict")
             cookies = parse_instagram_cookie_blob(raw)
+            uploaded_cookie_blob = normalize_instagram_cookie_blob(raw)
             sessionid = cookies.get("sessionid", "")
             csrftoken = cookies.get("csrftoken", "")
             ds_user_id = cookies.get("ds_user_id", "")
 
         info = validate_instagram_session(sessionid, csrftoken, ds_user_id)
-        cookie_blob = build_instagram_cookie_blob(sessionid, csrftoken, ds_user_id)
+        cookie_blob = uploaded_cookie_blob or build_instagram_cookie_blob(sessionid, csrftoken, ds_user_id)
 
         set_secret("instagram_sessionid", sessionid)
         set_secret("instagram_cookie_blob", cookie_blob)
