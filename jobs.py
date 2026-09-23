@@ -47,6 +47,17 @@ def create_job(
         return job
 
 
+def mark_job_failed(job_id: int, error: str) -> None:
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        if not job:
+            return
+        job.status = "failed"
+        job.error = str(error)[:4000]
+        job.finished_at = datetime.utcnow()
+        db.commit()
+
+
 def enqueue_job(job_id: int):
     return _executor.submit(process_job, job_id)
 
