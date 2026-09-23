@@ -137,7 +137,7 @@ def build_instagram_cookie_blob(sessionid: str, csrftoken: str = "", ds_user_id:
     return "\n".join(rows) + "\n"
 
 
-def validate_instagram_session(sessionid: str) -> dict:
+def validate_instagram_session(sessionid: str, csrftoken: str = "", ds_user_id: str = "") -> dict:
     sessionid = sessionid.strip()
     if not sessionid:
         raise ValueError("Instagram sessionid is empty")
@@ -152,7 +152,7 @@ def validate_instagram_session(sessionid: str) -> dict:
     response = httpx.get(
         "https://www.instagram.com/api/v1/accounts/current_user/?edit=true",
         headers=headers,
-        cookies={"sessionid": sessionid},
+        cookies={k: v for k, v in {"sessionid": sessionid, "csrftoken": csrftoken.strip(), "ds_user_id": ds_user_id.strip()}.items() if v},
         follow_redirects=False,
         timeout=15,
     )
@@ -160,7 +160,7 @@ def validate_instagram_session(sessionid: str) -> dict:
         location = response.headers.get("location", "")
         if "/accounts/login/" in location:
             raise ValueError("Instagram session is expired or invalid")
-        raise ValueError("Instagram session could not be verified")
+        return {"username": "", "user_id": "", "verified": False}
     if response.status_code in {401, 403}:
         raise ValueError("Instagram session is expired or invalid")
     if response.status_code != 200:
@@ -175,9 +175,9 @@ def validate_instagram_session(sessionid: str) -> dict:
     username = (user.get("username") or "").strip()
     user_id = str(user.get("pk") or user.get("id") or "").strip()
     if not username:
-        raise ValueError("Instagram session is not authenticated")
+        return {"username": "", "user_id": "", "verified": False}
 
-    return {"username": username, "user_id": user_id}
+    return {"username": username, "user_id": user_id, "verified": True}
 
 
 def validate_telegram_token(token: str) -> dict:
