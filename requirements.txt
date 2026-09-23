@@ -10,3 +10,4 @@ google-auth-httplib2>=0.2
 google-api-python-client>=2.130
 python-dotenv>=1.0
 httpx>=0.25,<0.26
+playwright==1.55.0
