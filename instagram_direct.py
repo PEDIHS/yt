@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import random
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -248,19 +249,28 @@ def send_instagram_received_ack(thread_id: str, text: str = "دریافت شد")
     if not cookies.get("sessionid"):
         raise RuntimeError("Instagram session is not configured")
 
-    mutation = str(uuid.uuid4())
+    mutation = str(random.randint(6800011111111111111, 6800099999999999999))
     account_seed = (cookies.get("ds_user_id") or "yt-studio").encode("utf-8")
     import hashlib
     device_id = "android-" + hashlib.md5(account_seed).hexdigest()[:16]
+    stable_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"yt-studio-instagram-{cookies.get('ds_user_id','account')}"))
     form = {
         "action": "send_item",
-        "thread_ids": json.dumps([thread_id]),
+        "is_x_transport_forward": "false",
+        "send_silently": "false",
+        "is_shh_mode": "0",
+        "send_attribution": "message_button",
         "client_context": mutation,
-        "mutation_token": mutation,
-        "offline_threading_id": mutation.replace("-", ""),
-        "_csrftoken": cookies.get("csrftoken", ""),
-        "_uuid": str(uuid.uuid4()),
         "device_id": device_id,
+        "mutation_token": mutation,
+        "_uuid": stable_uuid,
+        "_uid": cookies.get("ds_user_id", ""),
+        "_csrftoken": cookies.get("csrftoken", ""),
+        "btt_dual_send": "false",
+        "nav_chain": "1qT:feed_timeline:1,1qT:feed_timeline:2,1qT:feed_timeline:3,7Az:direct_inbox:4,7Az:direct_inbox:5,5rG:direct_thread:7",
+        "is_ae_dual_send": "false",
+        "offline_threading_id": mutation,
+        "thread_ids": json.dumps([int(thread_id)]),
         "text": text,
     }
     headers = _headers(cookies)
