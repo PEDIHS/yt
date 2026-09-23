@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ channel.label }} | YT Manager{% endblock %}
+{% block heading %}{{ channel.label }}{% endblock %}
+{% block subheading %}مدیریت مستقل تنظیمات انتشار و وضعیت کانال{% endblock %}
+{% block content %}
+<div class="grid two channel-detail-grid">
+  <section class="card profile-card">
+    <div class="channel-top">{% if channel.thumbnail_url %}<img src="{{ channel.thumbnail_url }}" alt="">{% else %}<div class="avatar big">YT</div>{% endif %}<div><h2>{{ channel.title }}</h2><p>{{ channel.custom_url or channel.youtube_channel_id }}</p></div></div>
+    <div class="stats three"><div><strong>{{ '{:,}'.format(channel.subscriber_count) }}</strong><span>مشترک</span></div><div><strong>{{ '{:,}'.format(channel.view_count) }}</strong><span>بازدید</span></div><div><strong>{{ '{:,}'.format(channel.video_count) }}</strong><span>ویدیو</span></div></div>
+    <form method="post" action="{{ url_for('channel_refresh', channel_id=channel.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn wide">همگام‌سازی آمار از YouTube</button></form>
+  </section>
+  <section class="card">
+    <div class="card-head"><div><h2>تنظیمات کانال</h2><p>این مقادیر فقط روی همین کانال اعمال می‌شوند.</p></div></div>
+    <form method="post" class="form-grid one">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>نام داخلی<input name="label" value="{{ channel.label }}" maxlength="120" required></label>
+      <label>هشتگ‌های پیش‌فرض<textarea name="default_hashtags" rows="4">{{ channel.default_hashtags }}</textarea></label>
+      <label>Privacy پیش‌فرض<select name="default_privacy"><option value="public" {% if channel.default_privacy=='public' %}selected{% endif %}>Public</option><option value="unlisted" {% if channel.default_privacy=='unlisted' %}selected{% endif %}>Unlisted</option><option value="private" {% if channel.default_privacy=='private' %}selected{% endif %}>Private</option></select></label>
+      <label class="check"><input type="checkbox" name="is_active" {% if channel.is_active %}checked{% endif %}><span>کانال برای ارسال فعال باشد</span></label>
+      <button class="btn primary">ذخیره تنظیمات</button>
+    </form>
+  </section>
+</div>
+<section class="card danger-zone"><div><h2>غیرفعال‌سازی / حذف</h2><p>اگر تاریخچه آپلود وجود داشته باشد، برای حفظ گزارش‌ها کانال فقط غیرفعال می‌شود.</p></div><form method="post" action="{{ url_for('channel_delete', channel_id=channel.id) }}" onsubmit="return confirm('مطمئن هستید؟')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn danger">حذف یا غیرفعال‌سازی</button></form></section>
+{% endblock %}
