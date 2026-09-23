@@ -67,12 +67,86 @@
     </div>
 
     {% if instagram.configured %}
-    <div class="integration-status-list">
-      <div><span>Account</span><strong>@{{ instagram.username or 'session configured' }}</strong></div>
-      <div><span>Cookies</span><strong>{{ 'Netscape cookie set' if instagram.cookie_mode else 'Session only' }}</strong></div>
-    </div>
-    {% endif %}
+    <section class="ig-account-card">
+      <div class="ig-account-glow ig-glow-a"></div>
+      <div class="ig-account-glow ig-glow-b"></div>
 
+      <div class="ig-account-top">
+        <div class="ig-profile">
+          <div class="ig-avatar-wrap">
+            <div class="ig-avatar"><i data-lucide="instagram"></i></div>
+            <span class="ig-online-dot"></span>
+          </div>
+          <div class="ig-profile-copy">
+            <span class="section-kicker">CONNECTED ACCOUNT</span>
+            <h3>{{ '@' ~ instagram.username if instagram.username else 'Instagram Session' }}</h3>
+            <p>اتصال فعال است و Downloader آماده استفاده از Cookieهای امن این اکانت است.</p>
+          </div>
+        </div>
+
+        <span class="ig-connected-pill">
+          <span class="status-orb"></span>
+          Connected
+        </span>
+      </div>
+
+      <div class="ig-account-metrics">
+        <div class="ig-metric">
+          <span class="ig-metric-icon"><i data-lucide="cookie"></i></span>
+          <div><small>Connection</small><strong>{{ 'cookies.txt' if instagram.cookie_mode else 'Session Cookie' }}</strong></div>
+        </div>
+        <div class="ig-metric">
+          <span class="ig-metric-icon"><i data-lucide="shield-check"></i></span>
+          <div><small>Security</small><strong>Encrypted</strong></div>
+        </div>
+        <div class="ig-metric">
+          <span class="ig-metric-icon"><i data-lucide="download-cloud"></i></span>
+          <div><small>Downloader</small><strong>Ready</strong></div>
+        </div>
+      </div>
+
+      <div class="ig-security-strip">
+        <div class="ig-security-copy">
+          <span class="ig-security-icon"><i data-lucide="lock-keyhole"></i></span>
+          <div>
+            <strong>Credential امن روی سرور</strong>
+            <small>Cookieها در دیتابیس رمزنگاری شده‌اند و فقط هنگام اجرای Job داخل فایل موقت استفاده می‌شوند.</small>
+          </div>
+        </div>
+        <span class="ig-secure-badge"><i data-lucide="check"></i> Server only</span>
+      </div>
+
+      <div class="ig-account-actions">
+        <details class="ig-update-panel">
+          <summary class="btn btn-soft"><i data-lucide="refresh-cw"></i> بروزرسانی اتصال</summary>
+          <form method="post" action="{{ url_for('integrations_instagram') }}" enctype="multipart/form-data" class="form-grid one ig-update-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label>Instagram cookies.txt
+              <input type="file" name="cookies_file" accept=".txt,text/plain">
+            </label>
+            <div class="form-divider"><span>یا ورود دستی</span></div>
+            <label>sessionid
+              <input type="password" name="sessionid" autocomplete="off" placeholder="sessionid">
+            </label>
+            <div class="cookie-fields">
+              <label>csrftoken
+                <input type="password" name="csrftoken" autocomplete="off" placeholder="csrftoken">
+              </label>
+              <label>ds_user_id
+                <input type="password" name="ds_user_id" autocomplete="off" placeholder="ds_user_id">
+              </label>
+            </div>
+            <button class="btn btn-primary"><i data-lucide="save"></i> ذخیره اتصال جدید</button>
+          </form>
+        </details>
+
+        <form method="post" action="{{ url_for('integrations_instagram_disconnect') }}" onsubmit="return confirm('اتصال Instagram حذف شود؟')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-danger"><i data-lucide="unlink"></i> قطع اتصال</button>
+        </form>
+      </div>
+    </section>
+    {% else %}
     <form method="post" action="{{ url_for('integrations_instagram') }}" enctype="multipart/form-data" class="form-grid one integration-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
@@ -101,12 +175,6 @@
       </div>
 
       <button class="btn btn-primary"><i data-lucide="shield-check"></i> تست اتصال و ذخیره امن</button>
-    </form>
-
-    {% if instagram.configured %}
-    <form method="post" action="{{ url_for('integrations_instagram_disconnect') }}" class="claim-form" onsubmit="return confirm('اتصال Instagram حذف شود؟')">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button class="btn btn-danger"><i data-lucide="unlink"></i> قطع اتصال Instagram</button>
     </form>
     {% endif %}
 
