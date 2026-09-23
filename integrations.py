@@ -107,6 +107,54 @@ def resolve_instagram_cookie_blob() -> str:
     return get_secret("instagram_cookie_blob")
 
 
+def instagram_direct_health() -> dict:
+    sessionid = resolve_instagram_session()
+    if not sessionid:
+        return {"ok": False, "status": "not_configured", "detail": "Instagram session is not configured"}
+
+    cookies = {}
+    raw = resolve_instagram_cookie_blob() or ""
+    for _domain, _include_subdomains, _path, _secure, _expires, name, value in _instagram_cookie_rows(raw):
+        cookies[name] = value
+    if not cookies.get("sessionid"):
+        cookies["sessionid"] = sessionid
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "X-IG-App-ID": "936619743392459",
+        "X-CSRFToken": cookies.get("csrftoken", ""),
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": "https://www.instagram.com/direct/inbox/",
+    }
+    try:
+        response = httpx.get(
+            "https://www.instagram.com/api/v1/direct_v2/inbox/",
+            params={"persistentBadging": "true", "use_unified_inbox": "true", "limit": "1"},
+            headers=headers,
+            cookies=cookies,
+            follow_redirects=False,
+            timeout=8,
+        )
+    except Exception as exc:
+        return {"ok": False, "status": "unreachable", "detail": str(exc)[:160]}
+
+    if response.status_code == 200:
+        return {
+            "ok": True,
+            "status": "ready",
+            "cookie_count": len(cookies),
+            "full_cookie_set": len(cookies) >= 6,
+        }
+    if response.status_code in {301, 302, 303, 307, 308}:
+        location = response.headers.get("location", "")
+        if "login" in location:
+            return {"ok": False, "status": "expired", "detail": "Instagram session expired", "cookie_count": len(cookies)}
+    if response.status_code in {401, 403}:
+        return {"ok": False, "status": "expired", "detail": f"Instagram rejected session ({response.status_code})", "cookie_count": len(cookies)}
+    return {"ok": False, "status": "error", "detail": f"Instagram returned HTTP {response.status_code}", "cookie_count": len(cookies)}
+
+
 def instagram_status() -> dict:
     sessionid = resolve_instagram_session()
     cookie_blob = resolve_instagram_cookie_blob()
