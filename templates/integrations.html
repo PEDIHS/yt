@@ -69,15 +69,37 @@
     {% if instagram.configured %}
     <div class="integration-status-list">
       <div><span>Account</span><strong>@{{ instagram.username or 'session configured' }}</strong></div>
-      <div><span>Session</span><strong>Encrypted / server only</strong></div>
+      <div><span>Cookies</span><strong>{{ 'Netscape cookie set' if instagram.cookie_mode else 'Session only' }}</strong></div>
     </div>
     {% endif %}
 
-    <form method="post" action="{{ url_for('integrations_instagram') }}" class="form-grid one integration-form">
+    <form method="post" action="{{ url_for('integrations_instagram') }}" enctype="multipart/form-data" class="form-grid one integration-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>Instagram sessionid
-        <input type="password" name="sessionid" autocomplete="off" placeholder="sessionid cookie value" required>
+
+      <div class="cookie-method">
+        <span class="section-kicker">روش پیشنهادی</span>
+        <strong>آپلود cookies.txt</strong>
+        <small>فایل Netscape cookies شامل Cookieهای instagram.com را آپلود کن. فقط Cookieهای لازم خوانده می‌شوند.</small>
+      </div>
+
+      <label>Instagram cookies.txt
+        <input type="file" name="cookies_file" accept=".txt,text/plain">
       </label>
+
+      <div class="form-divider"><span>یا ورود دستی Cookieها</span></div>
+
+      <label>sessionid
+        <input type="password" name="sessionid" autocomplete="off" placeholder="sessionid">
+      </label>
+      <div class="cookie-fields">
+        <label>csrftoken
+          <input type="password" name="csrftoken" autocomplete="off" placeholder="csrftoken">
+        </label>
+        <label>ds_user_id
+          <input type="password" name="ds_user_id" autocomplete="off" placeholder="ds_user_id">
+        </label>
+      </div>
+
       <button class="btn btn-primary"><i data-lucide="shield-check"></i> تست اتصال و ذخیره امن</button>
     </form>
 
@@ -90,7 +112,7 @@
 
     <div class="mini-warning">
       <i data-lucide="info"></i>
-      <span>پسورد Instagram ذخیره نمی‌شود؛ فقط Session ID ذخیره می‌شود و هر زمان بخواهی می‌توانی آن را revoke یا جایگزین کنی.</span>
+      <span>پسورد Instagram ذخیره نمی‌شود. Cookieها رمزنگاری می‌شوند و yt-dlp آن‌ها را فقط داخل فایل موقت همان Job استفاده می‌کند.</span>
     </div>
   </article>
 
@@ -133,7 +155,7 @@
   <div class="setup-note-icon"><i data-lucide="lock-keyhole"></i></div>
   <div>
     <strong>Credentialها وارد GitHub نمی‌شوند.</strong>
-    <p>Bot Token و Instagram Session ID به‌صورت Fernet-encrypted در SQLite ذخیره می‌شوند. Google OAuth JSON فقط روی همین سرور قرار می‌گیرد و Refresh Token کانال‌ها نیز جداگانه رمزنگاری می‌شود.</p>
+    <p>Bot Token و Cookieهای Instagram به‌صورت Fernet-encrypted در SQLite ذخیره می‌شوند. Google OAuth JSON فقط روی همین سرور قرار می‌گیرد و Refresh Token کانال‌ها نیز جداگانه رمزنگاری می‌شود.</p>
   </div>
 </section>
 {% endblock %}
