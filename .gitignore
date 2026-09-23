@@ -1,0 +1,43 @@
+# Secrets / credentials
+.env
+.env.*
+!.env.example
+client_secret.json
+token.json
+token.pickle
+*.session
+*.session-journal
+
+# Runtime data
+downloads/
+upload_log.csv
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Vendored FFmpeg / large archives
+ffmpeg-*-static/
+ffmpeg*.tar
+ffmpeg*.tar.xz
