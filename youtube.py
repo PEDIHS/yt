@@ -6,6 +6,7 @@ import hmac
 import io
 import json
 import logging
+import mimetypes
 import secrets
 from datetime import datetime
 from typing import Optional
@@ -590,7 +591,15 @@ def upload_to_youtube(
             },
         }
 
-        media = MediaFileUpload(file_path, chunksize=8 * 1024 * 1024, resumable=True)
+        mime_type, _ = mimetypes.guess_type(file_path)
+        if not mime_type or not mime_type.startswith("video/"):
+            raise RuntimeError(f"Downloaded file is not a supported video media type: {mime_type or 'unknown'}")
+        media = MediaFileUpload(
+            file_path,
+            mimetype=mime_type,
+            chunksize=8 * 1024 * 1024,
+            resumable=True,
+        )
         request = service.videos().insert(part="snippet,status", body=body, media_body=media)
         response = None
         while response is None:
