@@ -6,13 +6,13 @@
 
 {% block content %}
 <section class="integration-grid">
-  <article class="glass-card integration-card">
+  <article class="glass-card integration-card telegram-integration-card">
     <div class="integration-head">
       <div class="integration-icon telegram"><i data-lucide="send"></i></div>
       <div class="grow">
-        <span class="section-kicker">Telegram</span>
+        <span class="section-kicker">Telegram Control</span>
         <h2>Telegram Bot</h2>
-        <p>توکن در دیتابیس رمزنگاری می‌شود و در رابط کاربری دوباره نمایش داده نمی‌شود.</p>
+        <p>Bot Token و ادمین اصلی را یک‌جا ثبت کن؛ Token رمزنگاری می‌شود و آیدی عددی مستقیماً دسترسی Admin می‌گیرد.</p>
       </div>
       <span class="scope-badge {{ 'ok' if bot_configured else 'warn' }}">
         <i data-lucide="{{ 'circle-check' if bot_configured else 'triangle-alert' }}"></i>
@@ -21,36 +21,59 @@
     </div>
 
     {% if bot_configured %}
-    <div class="integration-status-list">
-      <div><span>Bot</span><strong>@{{ bot_username or 'configured' }}</strong></div>
-      <div><span>Admin count</span><strong>{{ admin_count }}</strong></div>
+    <div class="tg-connected-card">
+      <div class="tg-connected-main">
+        <div class="tg-bot-avatar"><i data-lucide="bot"></i><span class="status-orb"></span></div>
+        <div class="grow">
+          <span class="section-kicker">ACTIVE BOT</span>
+          <h3>@{{ bot_username or 'configured' }}</h3>
+          <p>ربات فعال است و تنظیمات دسترسی Admin از همین بخش مدیریت می‌شود.</p>
+        </div>
+        {% if bot_username %}
+        <a class="btn btn-soft" href="https://t.me/{{ bot_username }}" target="_blank" rel="noopener"><i data-lucide="external-link"></i> باز کردن ربات</a>
+        {% endif %}
+      </div>
+      <div class="tg-status-grid">
+        <div><i data-lucide="shield-check"></i><span>Token</span><strong>Encrypted</strong></div>
+        <div><i data-lucide="user-round-check"></i><span>Primary Admin</span><strong>{{ primary_admin_id or 'Not set' }}</strong></div>
+        <div><i data-lucide="users"></i><span>Admins</span><strong>{{ admin_count }}</strong></div>
+      </div>
     </div>
     {% endif %}
 
-    <form method="post" action="{{ url_for('integrations_telegram') }}" class="form-grid one integration-form">
+    <form method="post" action="{{ url_for('integrations_telegram') }}" class="form-grid one integration-form tg-setup-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>Bot Token
-        <input type="password" name="bot_token" autocomplete="off" placeholder="123456789:AA..." required>
-      </label>
-      <button class="btn btn-primary"><i data-lucide="shield-check"></i> اعتبارسنجی و ذخیره امن</button>
+      <div class="tg-form-grid">
+        <label>Bot Token
+          <input type="password" name="bot_token" autocomplete="off" placeholder="{{ 'برای حفظ Token فعلی خالی بگذار' if bot_configured else '123456789:AA...' }}" {{ '' if bot_configured else 'required' }}>
+          <span class="hint">از BotFather بگیر؛ بعد از ذخیره دوباره نمایش داده نمی‌شود.</span>
+        </label>
+        <label>آیدی عددی ادمین اصلی
+          <input type="text" name="primary_admin_id" inputmode="numeric" pattern="[0-9]+" placeholder="مثلاً 123456789" value="{{ primary_admin_id or '' }}" required>
+          <span class="hint">فقط User ID عددی Telegram؛ این کاربر مستقیماً Admin می‌شود.</span>
+        </label>
+      </div>
+      <button class="btn btn-primary"><i data-lucide="shield-check"></i> اعتبارسنجی و ذخیره اتصال Telegram</button>
     </form>
 
     {% if bot_configured %}
-    <form method="post" action="{{ url_for('integrations_claim_code') }}" class="claim-form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button class="btn btn-soft"><i data-lucide="key-round"></i> ساخت کد Claim جدید</button>
-    </form>
+    <div class="tg-fallback-row">
+      <div><strong>ورود ادمین دوم</strong><small>برای افزودن Admin دیگر بدون ورود دستی ID از Claim Code استفاده کن.</small></div>
+      <form method="post" action="{{ url_for('integrations_claim_code') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-soft"><i data-lucide="key-round"></i> ساخت Claim Code</button>
+      </form>
+    </div>
     {% endif %}
 
     {% if claim_code %}
     <div class="claim-box">
       <span>کد یک‌بارمصرف ۱۵ دقیقه‌ای</span>
       <strong>{{ claim_code }}</strong>
-      <small>در Telegram برای همین ربات بفرست: <code>/claim {{ claim_code }}</code></small>
+      <small>داخل همین Bot ارسال کن: <code>/claim {{ claim_code }}</code></small>
     </div>
     {% endif %}
   </article>
-
 
   <article class="glass-card integration-card">
     <div class="integration-head">
@@ -216,6 +239,16 @@
       </label>
       <button class="btn btn-primary"><i data-lucide="upload-cloud"></i> بررسی و نصب OAuth Client</button>
     </form>
+
+    <div class="google-channel-cta">
+      <div>
+        <span class="section-kicker">CHANNEL MANAGEMENT</span>
+        <strong>{{ 'OAuth آماده است؛ حالا اکانت‌های YouTube را مدیریت کن.' if google_status.configured and google_status.redirect_ok else 'بعد از نصب OAuth، کانال‌ها را از صفحه Channels متصل کن.' }}</strong>
+      </div>
+      <a class="btn {{ 'btn-primary' if google_status.configured and google_status.redirect_ok else 'btn-soft' }}" href="{{ url_for('channels') }}">
+        <i data-lucide="radio-tower"></i> رفتن به مدیریت کانال‌ها
+      </a>
+    </div>
   </article>
 </section>
 
