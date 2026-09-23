@@ -5,14 +5,113 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional
 
+import httpx
+
 from config import Config
 from db import SessionLocal
 from downloader import cleanup_download, download_video
-from models import UploadJob, YouTubeChannel
+from integrations import get_secret, resolve_telegram_token
+from models import TelegramAdmin, UploadJob, YouTubeChannel
 from youtube import upload_to_youtube
 
 logger = logging.getLogger("jobs")
 _executor = ThreadPoolExecutor(max_workers=Config.MAX_WORKERS, thread_name_prefix="uploads")
+
+
+def _telegram_targets_for_job(job_id: int) -> list[int]:
+    targets: list[int] = []
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        if job and job.telegram_user_id:
+            targets.append(int(job.telegram_user_id))
+
+        primary = (get_secret("telegram_primary_admin_id") or "").strip()
+        if primary.isdigit():
+            targets.append(int(primary))
+        elif not targets:
+            admin = db.query(TelegramAdmin).order_by(TelegramAdmin.created_at.asc()).first()
+            if admin:
+                targets.append(int(admin.user_id))
+
+    return list(dict.fromkeys(targets))
+
+
+def _send_telegram_job_event(
+    job_id: int,
+    *,
+    event: str,
+    video_url: str = "",
+    error: str = "",
+) -> None:
+    token = resolve_telegram_token()
+    if not token:
+        return
+
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        if not job:
+            return
+        channel = db.get(YouTubeChannel, job.channel_id)
+        title = job.title
+        channel_name = (channel.label or channel.title) if channel else f"Channel #{job.channel_id}"
+        privacy = job.privacy
+
+    if event == "uploading":
+        text = (
+            f"🚀 ویدیو آماده انتشار است و در حال ارسال به YouTube می‌باشد.\n\n"
+            f"🎬 {title}\n"
+            f"📺 {channel_name}\n"
+            f"🔐 {privacy}\n"
+            f"🧾 Job #{job_id}"
+        )
+        reply_markup = None
+    elif event == "completed":
+        text = (
+            f"✅ ویدیو با موفقیت منتشر شد.\n\n"
+            f"🎬 {title}\n"
+            f"📺 {channel_name}\n"
+            f"🔐 {privacy}\n"
+            f"🔗 {video_url}\n"
+            f"🧾 Job #{job_id}"
+        )
+        reply_markup = {
+            "inline_keyboard": [[
+                {"text": "▶️ مشاهده در YouTube", "url": video_url}
+            ]]
+        } if video_url else None
+    else:
+        text = (
+            f"❌ انتشار ویدیو ناموفق بود.\n\n"
+            f"🎬 {title}\n"
+            f"📺 {channel_name}\n"
+            f"🧾 Job #{job_id}\n"
+            f"خطا: {(error or 'Unknown error')[:700]}"
+        )
+        reply_markup = None
+
+    for chat_id in _telegram_targets_for_job(job_id):
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": False,
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        try:
+            response = httpx.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json=payload,
+                timeout=10,
+            )
+            if response.status_code != 200:
+                logger.warning(
+                    "Telegram job event failed for job %s chat %s: HTTP %s",
+                    job_id,
+                    chat_id,
+                    response.status_code,
+                )
+        except Exception:
+            logger.exception("Telegram job event failed for job %s", job_id)
 
 
 def create_job(
@@ -89,6 +188,8 @@ def process_job(job_id: int) -> dict:
             job.status = "uploading"
             db.commit()
 
+        _send_telegram_job_event(job_id, event="uploading")
+
         result = upload_to_youtube(
             file_path=file_path,
             channel_id=channel_id,
@@ -105,6 +206,11 @@ def process_job(job_id: int) -> dict:
             job.video_url = result["video_url"]
             job.finished_at = datetime.utcnow()
             db.commit()
+        _send_telegram_job_event(
+            job_id,
+            event="completed",
+            video_url=result.get("video_url") or "",
+        )
         return {"success": True, "job_id": job_id, **result}
     except Exception as exc:
         logger.exception("Job %s failed", job_id)
@@ -115,6 +221,7 @@ def process_job(job_id: int) -> dict:
                 job.error = str(exc)[:4000]
                 job.finished_at = datetime.utcnow()
                 db.commit()
+        _send_telegram_job_event(job_id, event="failed", error=str(exc))
         return {"success": False, "job_id": job_id, "error": str(exc)}
     finally:
         cleanup_download(file_path)
