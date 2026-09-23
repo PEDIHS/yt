@@ -128,9 +128,14 @@ def validate_instagram_session(sessionid: str) -> dict:
         "https://www.instagram.com/api/v1/accounts/current_user/?edit=true",
         headers=headers,
         cookies={"sessionid": sessionid},
-        follow_redirects=True,
+        follow_redirects=False,
         timeout=15,
     )
+    if response.status_code in {301, 302, 303, 307, 308}:
+        location = response.headers.get("location", "")
+        if "/accounts/login/" in location:
+            raise ValueError("Instagram session is expired or invalid")
+        raise ValueError("Instagram session could not be verified")
     if response.status_code in {401, 403}:
         raise ValueError("Instagram session is expired or invalid")
     if response.status_code != 200:
