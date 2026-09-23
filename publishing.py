@@ -383,6 +383,30 @@ def schedule_job_smart(job_id: int) -> UploadSchedule:
         return schedule
 
 
+def local_datetime_to_utc(channel_id: int, value: str) -> datetime:
+    value = (value or "").strip()
+    if not value:
+        raise ValueError("Scheduled date/time is required")
+    try:
+        local_naive = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("Invalid scheduled date/time") from exc
+    cfg = get_or_create_publishing_config(channel_id)
+    tz = _zone(cfg.timezone)
+    if local_naive.tzinfo is None:
+        local_aware = local_naive.replace(tzinfo=tz)
+    else:
+        local_aware = local_naive.astimezone(tz)
+    return local_aware.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def utc_to_channel_local(channel_id: int, value: datetime) -> datetime:
+    cfg = get_or_create_publishing_config(channel_id)
+    tz = _zone(cfg.timezone)
+    aware = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return aware.astimezone(tz)
+
+
 def schedule_job_manual(job_id: int, scheduled_for_utc: datetime) -> UploadSchedule:
     if scheduled_for_utc <= _utcnow() + timedelta(minutes=2):
         raise ValueError("Scheduled time must be at least 2 minutes in the future")
