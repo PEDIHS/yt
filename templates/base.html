@@ -6,6 +6,9 @@
   <meta name="theme-color" content="#070910">
   <title>{% block title %}YT Studio Manager{% endblock %}</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Vazirmatn:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='panel.css') }}">
   {% block head %}{% endblock %}
 </head>
@@ -44,6 +47,9 @@
 
       <div class="nav-caption">انتشار و عملیات</div>
       <nav class="side-nav">
+        <a href="{{ url_for('videos_manager') }}" class="{% if request.endpoint and (request.endpoint.startswith('video_') or request.endpoint.startswith('playlist_') or request.endpoint == 'videos_manager') %}active{% endif %}">
+          <i data-lucide="clapperboard"></i><span>مدیریت ویدیوها</span>
+        </a>
         <a href="{{ url_for('upload') }}" class="{% if request.endpoint == 'upload' %}active{% endif %}">
           <i data-lucide="send"></i><span>ارسال محتوا</span>
         </a>
