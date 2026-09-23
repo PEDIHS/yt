@@ -18,13 +18,15 @@ from models import ChannelPublishingConfig, UploadJob, UploadSchedule, YouTubeCh
 from youtube import list_channel_videos
 
 logger = logging.getLogger("publishing")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 _scheduler_executor = ThreadPoolExecutor(max_workers=max(1, Config.MAX_WORKERS), thread_name_prefix="smart-publisher")
 
 DEFAULT_PEAK_HOURS = [12, 15, 18, 21, 23]
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _zone(name: str) -> ZoneInfo:
