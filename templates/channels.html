@@ -5,19 +5,46 @@
 {% block subheading %}اتصال، وضعیت OAuth و عملکرد ۲۸ روزه هر کانال{% endblock %}
 
 {% block content %}
-<section class="connect-hero glass-card">
-  <div class="connect-copy">
-    <div class="hero-icon"><i data-lucide="circle-plus"></i></div>
+<section class="channel-onboarding glass-card">
+  <div class="onboarding-copy">
+    <div class="hero-icon"><i data-lucide="user-round-plus"></i></div>
     <div>
-      <span class="section-kicker">Google OAuth</span>
-      <h2>اتصال کانال یا Brand Channel جدید</h2>
-      <p>هر کانال credential رمزنگاری‌شده، Analytics و تنظیمات انتشار مستقل دارد.</p>
+      <span class="section-kicker">ONE-STEP CHANNEL CONNECT</span>
+      <h2>افزودن اکانت / کانال YouTube جدید</h2>
+      <p>فایل OAuth از نوع Web application را بده؛ پنل آن را بررسی می‌کند و بلافاصله ورود Google را برای اتصال کانال باز می‌کند.</p>
     </div>
   </div>
-  <form method="post" action="{{ url_for('channels_connect') }}" class="connect-form modern-connect">
+
+  <form id="channelQuickConnect" class="channel-connect-wizard" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input name="label" placeholder="نام داخلی؛ مثلاً Main Shorts" maxlength="120">
-    <button class="btn btn-primary"><i data-lucide="key-round"></i> اتصال با Google</button>
+
+    <label class="oauth-dropzone" for="oauthClientFile">
+      <input id="oauthClientFile" type="file" name="client_secret" accept=".json,application/json" required>
+      <span class="oauth-drop-icon"><i data-lucide="file-key-2"></i></span>
+      <span class="oauth-drop-copy">
+        <strong>Google OAuth JSON</strong>
+        <small id="oauthFileName">فایل Web application را انتخاب کن</small>
+      </span>
+      <span class="oauth-drop-action">انتخاب فایل</span>
+    </label>
+
+    <div class="connect-wizard-footer">
+      <label class="connect-label-field">
+        <span>نام داخلی کانال <small>اختیاری</small></span>
+        <input id="channelLabelInput" name="label" placeholder="اگر خالی باشد اسم واقعی کانال ثبت می‌شود" maxlength="120">
+      </label>
+      <button id="channelConnectButton" class="btn btn-primary connect-now-btn" type="submit">
+        <i data-lucide="log-in"></i>
+        <span>آپلود و اتصال با Google</span>
+      </button>
+    </div>
+
+    <div id="channelConnectStatus" class="connect-progress" hidden></div>
+  </form>
+
+  <form id="googleConnectBridge" method="post" action="{{ url_for('channels_connect') }}" hidden>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input id="bridgeLabel" type="hidden" name="label" value="">
   </form>
 </section>
 
@@ -36,6 +63,7 @@
             <span class="status-dot {{ 'active' if channel.is_active else 'inactive' }}"></span>
           </div>
           <small>{{ channel.title }}</small>
+          {% if channel.custom_url %}<span class="channel-handle-mini">{{ channel.custom_url }}</span>{% endif %}
         </div>
       </div>
       <span class="scope-badge {% if auth.analytics %}ok{% else %}warn{% endif %}">
@@ -62,6 +90,11 @@
     <div class="portfolio-no-data"><i data-lucide="database-zap"></i><span>Analytics هنوز Sync نشده است.</span></div>
     {% endif %}
 
+    <div class="channel-tech-meta">
+      <span><i data-lucide="fingerprint"></i>{{ channel.youtube_channel_id }}</span>
+      <span><i data-lucide="refresh-cw"></i>{{ channel.last_synced_at.strftime('%Y-%m-%d %H:%M') if channel.last_synced_at else 'Not synced' }}</span>
+    </div>
+
     <div class="portfolio-footer">
       <div class="portfolio-meta">
         <span class="privacy-dot privacy-{{ channel.default_privacy }}"></span>
@@ -86,4 +119,65 @@
   <div><i data-lucide="line-chart"></i><span><strong>Analytics API</strong><small>Views، Likes، Comments، Watch Time و Subscriber growth.</small></span></div>
   <div><i data-lucide="layers-3"></i><span><strong>Multi‑Channel</strong><small>آمار و تنظیمات انتشار برای هر کانال مجزا است.</small></span></div>
 </section>
+{% endblock %}
+
+{% block page_scripts %}
+<script>
+(() => {
+  const form = document.getElementById('channelQuickConnect');
+  const fileInput = document.getElementById('oauthClientFile');
+  const fileName = document.getElementById('oauthFileName');
+  const button = document.getElementById('channelConnectButton');
+  const status = document.getElementById('channelConnectStatus');
+  const bridge = document.getElementById('googleConnectBridge');
+  const bridgeLabel = document.getElementById('bridgeLabel');
+  const labelInput = document.getElementById('channelLabelInput');
+
+  if (!form || !fileInput || !bridge) return;
+
+  fileInput.addEventListener('change', () => {
+    fileName.textContent = fileInput.files?.[0]?.name || 'فایل Web application را انتخاب کن';
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const file = fileInput.files?.[0];
+    if (!file) return;
+
+    button.disabled = true;
+    status.hidden = false;
+    status.className = 'connect-progress active';
+    status.innerHTML = '<span class="connect-spinner"></span><div><strong>در حال بررسی OAuth Client...</strong><small>بعد از تأیید فایل، صفحه Google به‌صورت خودکار باز می‌شود.</small></div>';
+
+    try {
+      const payload = new FormData();
+      payload.append('csrf_token', form.querySelector('[name="csrf_token"]').value);
+      payload.append('client_secret', file);
+
+      const response = await fetch('{{ url_for("integrations_google") }}', {
+        method: 'POST',
+        body: payload,
+        credentials: 'same-origin'
+      });
+      const html = await response.text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const error = doc.querySelector('.flash.danger');
+
+      if (error) {
+        throw new Error(error.textContent.trim());
+      }
+
+      status.innerHTML = '<span class="connect-success"><i data-lucide="circle-check"></i></span><div><strong>OAuth Client آماده است</strong><small>در حال انتقال به Google برای انتخاب و تأیید کانال...</small></div>';
+      if (window.lucide) window.lucide.createIcons();
+      bridgeLabel.value = labelInput.value.trim();
+      setTimeout(() => bridge.submit(), 350);
+    } catch (error) {
+      status.className = 'connect-progress error';
+      status.innerHTML = '<span class="connect-error-icon">!</span><div><strong>اتصال شروع نشد</strong><small></small></div>';
+      status.querySelector('small').textContent = error?.message || 'خطای نامشخص در فایل OAuth';
+      button.disabled = false;
+    }
+  });
+})();
+</script>
 {% endblock %}
