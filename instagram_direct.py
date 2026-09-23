@@ -5,7 +5,7 @@ import os
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from pathlib import Path
 
@@ -16,6 +16,8 @@ from integrations import get_secret, resolve_instagram_cookie_blob, resolve_inst
 from models import InstagramDirectShare, TelegramAdmin, YouTubeChannel
 
 logger = logging.getLogger("instagram-direct")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+_last_disconnect_alert_at: datetime | None = None
 PLAYWRIGHT_BROWSERS_PATH = os.getenv(
     "PLAYWRIGHT_BROWSERS_PATH",
     "/opt/yt.pedramhs.ir/playwright-browsers",
@@ -452,6 +454,39 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
     return len(created_ids)
 
 
+def notify_instagram_disconnect(detail: str) -> None:
+    global _last_disconnect_alert_at
+    now = datetime.utcnow()
+    if _last_disconnect_alert_at and now - _last_disconnect_alert_at < timedelta(hours=6):
+        return
+
+    token = resolve_telegram_token()
+    admin_id = _primary_admin_id()
+    if not token or not admin_id:
+        return
+
+    payload = {
+        "chat_id": admin_id,
+        "text": (
+            "⚠️ Instagram Direct قطع شده است.\n\n"
+            "Watcher دیگر Inbox را نمی‌خواند، بنابراین Shareهای جدید در Telegram نمایش داده نمی‌شوند.\n"
+            "از پنل Integrations یک cookies.txt تازه و کامل برای Instagram آپلود کن.\n\n"
+            f"وضعیت: {detail[:180]}"
+        ),
+        "disable_web_page_preview": True,
+    }
+    try:
+        response = httpx.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json=payload,
+            timeout=15,
+        )
+        if response.status_code == 200:
+            _last_disconnect_alert_at = now
+    except Exception:
+        logger.exception("Failed to send Instagram disconnect alert")
+
+
 def poll_once() -> int:
     payload = fetch_primary_inbox()
     bootstrapped = get_secret("instagram_direct_bootstrapped") == "1"
@@ -474,7 +509,10 @@ def run_watcher() -> None:
                 logger.info("Detected %s new Instagram shared media items", count)
             backoff = POLL_SECONDS
         except Exception as exc:
-            logger.warning("Instagram Direct poll failed: %s", exc)
+            detail = str(exc)
+            logger.warning("Instagram Direct poll failed: %s", detail)
+            if "session expired" in detail.lower() or "login" in detail.lower():
+                notify_instagram_disconnect(detail)
             backoff = min(300, max(POLL_SECONDS, backoff * 2))
         time.sleep(backoff)
 
