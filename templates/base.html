@@ -50,6 +50,9 @@
         <a href="{{ url_for('videos_manager') }}" class="{% if request.endpoint and (request.endpoint.startswith('video_') or request.endpoint.startswith('playlist_') or request.endpoint == 'videos_manager') %}active{% endif %}">
           <i data-lucide="clapperboard"></i><span>مدیریت ویدیوها</span>
         </a>
+        <a href="{{ url_for('publishing_page') }}" class="{% if request.endpoint and (request.endpoint.startswith('publishing_') or request.endpoint.startswith('queue_')) %}active{% endif %}">
+          <i data-lucide="sparkles"></i><span>انتشار هوشمند</span>
+        </a>
         <a href="{{ url_for('upload') }}" class="{% if request.endpoint == 'upload' %}active{% endif %}">
           <i data-lucide="send"></i><span>ارسال محتوا</span>
         </a>
