@@ -26,7 +26,7 @@ from publishing import (
     utc_to_channel_local,
 )
 from integrations import claim_telegram_admin, is_telegram_admin, resolve_telegram_token
-from models import OAuthRequest, TelegramPreference, UploadJob, YouTubeChannel
+from models import InstagramDirectShare, OAuthRequest, TelegramPreference, UploadJob, YouTubeChannel
 from security import new_token
 from youtube import (
     add_video_to_playlist,
@@ -106,6 +106,32 @@ def _set_selected_channel(user_id: int, channel_id: int) -> None:
         else:
             pref.channel_id = channel_id
         db.commit()
+
+
+def _instagram_channel_keyboard(share_id: int) -> InlineKeyboardMarkup:
+    with SessionLocal() as db:
+        channels = db.query(YouTubeChannel).filter(
+            YouTubeChannel.is_active.is_(True)
+        ).order_by(YouTubeChannel.label.asc()).all()
+        rows = [
+            [InlineKeyboardButton(
+                f"📺 {(channel.label or channel.title)[:45]}",
+                callback_data=f"igch:{share_id}:{channel.id}",
+            )]
+            for channel in channels
+        ]
+    rows.append([InlineKeyboardButton("❌ رد کردن", callback_data=f"igcancel:{share_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _instagram_confirmation_keyboard(share_id: int, channel_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ تأیید و ثبت", callback_data=f"igconfirm:{share_id}:{channel_id}")],
+        [
+            InlineKeyboardButton("🔄 تغییر کانال", callback_data=f"igchange:{share_id}"),
+            InlineKeyboardButton("❌ لغو", callback_data=f"igcancel:{share_id}"),
+        ],
+    ])
 
 
 def _video_manage_keyboard(channel_id: int, video_id: str) -> InlineKeyboardMarkup:
@@ -1473,6 +1499,138 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await smart_command(update, context)
     elif data == "queue":
         await queue_command(update, context)
+    elif data.startswith("igch:"):
+        _, raw_share, raw_channel = data.split(":", 2)
+        share_id, channel_id = int(raw_share), int(raw_channel)
+        with SessionLocal() as db:
+            share = db.get(InstagramDirectShare, share_id)
+            channel = db.get(YouTubeChannel, channel_id)
+            if not share or share.status in {"confirmed", "scheduled", "queued", "cancelled"}:
+                await query.message.reply_text("این درخواست دیگر فعال نیست.")
+                return
+            if not channel or not channel.is_active:
+                await query.message.reply_text("این کانال فعال نیست.")
+                return
+            share.selected_channel_id = channel_id
+            share.selected_at = datetime.utcnow()
+            share.status = "awaiting_confirmation"
+            db.commit()
+            title = share.title_hint or ("Instagram Reel" if share.media_type == "reel" else "Instagram Post")
+            url = share.media_url
+            channel_name = channel.label or channel.title
+
+        cfg = await asyncio.to_thread(publishing_config_payload, channel_id)
+        if cfg.get("enabled"):
+            try:
+                from publishing import next_smart_slot
+                next_utc, score, _ = await asyncio.to_thread(next_smart_slot, channel_id)
+                local = await asyncio.to_thread(utc_to_channel_local, channel_id, next_utc)
+                mode_text = f"✨ Smart Queue · Slot پیشنهادی {local:%Y-%m-%d %H:%M}"
+            except Exception:
+                mode_text = "✨ Smart Queue"
+        else:
+            mode_text = "🚀 انتشار فوری"
+
+        await query.message.reply_text(
+            f"✅ مقصد انتخاب شد\n\n"
+            f"📺 کانال: {channel_name}\n"
+            f"🎬 {title}\n"
+            f"⚙️ حالت: {mode_text}\n"
+            f"🔗 {url}\n\n"
+            f"تأیید می‌کنی؟",
+            reply_markup=_instagram_confirmation_keyboard(share_id, channel_id),
+        )
+    elif data.startswith("igchange:"):
+        share_id = int(data.split(":", 1)[1])
+        with SessionLocal() as db:
+            share = db.get(InstagramDirectShare, share_id)
+            if not share or share.status in {"confirmed", "scheduled", "queued", "cancelled"}:
+                await query.message.reply_text("این درخواست دیگر فعال نیست.")
+                return
+            share.status = "pending_channel"
+            share.selected_channel_id = None
+            share.selected_at = None
+            db.commit()
+        await query.message.reply_text("کانال مقصد را انتخاب کن:", reply_markup=_instagram_channel_keyboard(share_id))
+    elif data.startswith("igcancel:"):
+        share_id = int(data.split(":", 1)[1])
+        with SessionLocal() as db:
+            share = db.get(InstagramDirectShare, share_id)
+            if not share:
+                await query.message.reply_text("درخواست پیدا نشد.")
+                return
+            if share.status in {"confirmed", "scheduled", "queued"}:
+                await query.message.reply_text("این محتوا قبلاً ثبت شده و از اینجا قابل لغو نیست.")
+                return
+            share.status = "cancelled"
+            share.cancelled_at = datetime.utcnow()
+            db.commit()
+        await query.message.reply_text("❌ این Instagram Share رد شد و وارد صف نشد.")
+    elif data.startswith("igconfirm:"):
+        _, raw_share, raw_channel = data.split(":", 2)
+        share_id, channel_id = int(raw_share), int(raw_channel)
+        with SessionLocal() as db:
+            share = db.get(InstagramDirectShare, share_id)
+            channel = db.get(YouTubeChannel, channel_id)
+            if not share or not channel:
+                await query.message.reply_text("درخواست یا کانال پیدا نشد.")
+                return
+            if share.status in {"confirmed", "scheduled", "queued"} and share.upload_job_id:
+                await query.message.reply_text(f"این Share قبلاً با Job #{share.upload_job_id} ثبت شده.")
+                return
+            if share.status == "cancelled":
+                await query.message.reply_text("این Share قبلاً لغو شده.")
+                return
+            if share.selected_channel_id != channel_id:
+                await query.message.reply_text("کانال انتخابی با درخواست فعلی مطابقت ندارد.")
+                return
+            source_url = share.media_url
+            title = (share.title_hint or ("Instagram Reel" if share.media_type == "reel" else "Instagram Post"))[:255]
+
+        try:
+            job = create_job(
+                channel_id=channel_id,
+                source_url=source_url,
+                title=title,
+                source="instagram-direct",
+                telegram_user_id=query.from_user.id,
+            )
+            cfg = await asyncio.to_thread(publishing_config_payload, channel_id)
+            if cfg.get("enabled"):
+                schedule = await asyncio.to_thread(schedule_job_smart, job.id)
+                local = await asyncio.to_thread(utc_to_channel_local, channel_id, schedule.scheduled_for)
+                final_status = "scheduled"
+                result_text = (
+                    f"✅ ثبت شد.\n"
+                    f"📺 {channel.label or channel.title}\n"
+                    f"✨ Smart Queue\n"
+                    f"🕓 {local:%Y-%m-%d %H:%M}\n"
+                    f"Job #{job.id}"
+                )
+            else:
+                final_status = "queued"
+                result_text = (
+                    f"✅ ثبت شد و دانلود/آپلود شروع شد.\n"
+                    f"📺 {channel.label or channel.title}\n"
+                    f"🚀 انتشار فوری\n"
+                    f"Job #{job.id}"
+                )
+
+            with SessionLocal() as db:
+                share = db.get(InstagramDirectShare, share_id)
+                if share:
+                    share.upload_job_id = job.id
+                    share.confirmed_at = datetime.utcnow()
+                    share.status = final_status
+                    db.commit()
+
+            await query.message.reply_text(result_text)
+            if not cfg.get("enabled"):
+                context.application.create_task(
+                    _run_job_and_notify(context, query.message.chat_id, job.id)
+                )
+        except Exception as exc:
+            await query.message.reply_text(f"❌ ثبت Instagram Share ناموفق بود: {exc}")
     elif data == "noop":
         await query.message.reply_text("لغو شد.")
     elif data.startswith("autopost:"):
