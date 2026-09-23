@@ -23,8 +23,11 @@ from integrations import (
     create_claim_code,
     get_secret,
     google_oauth_status,
+    instagram_status,
     save_google_web_client,
+    validate_instagram_session,
     set_secret,
+    delete_secret,
     telegram_admin_count,
     validate_telegram_token,
 )
@@ -284,6 +287,7 @@ def sync_all_analytics():
 @login_required
 def integrations_page():
     google_status = google_oauth_status()
+    instagram = instagram_status()
     bot_configured = bool(get_secret("telegram_bot_token") or Config.TELEGRAM_BOT_TOKEN)
     bot_username = get_secret("telegram_bot_username")
     admin_count = telegram_admin_count() + len(Config.TELEGRAM_ADMIN_IDS)
@@ -291,6 +295,7 @@ def integrations_page():
     return render_template(
         "integrations.html",
         google_status=google_status,
+        instagram=instagram,
         bot_configured=bot_configured,
         bot_username=bot_username,
         admin_count=admin_count,
@@ -326,6 +331,35 @@ def integrations_claim_code():
     code = create_claim_code(15)
     session["telegram_claim_code"] = code
     _audit("panel", "telegram_claim_code_created")
+    return redirect(url_for("integrations_page"))
+
+
+@app.post("/integrations/instagram")
+@login_required
+def integrations_instagram():
+    require_csrf()
+    sessionid = request.form.get("sessionid", "").strip()
+    try:
+        info = validate_instagram_session(sessionid)
+        set_secret("instagram_sessionid", sessionid)
+        set_secret("instagram_username", info.get("username") or "")
+        set_secret("instagram_user_id", info.get("user_id") or "")
+        _audit("panel", "instagram_connected", f"username={info.get('username') or ''}")
+        flash(f"Instagram @{info.get('username')} با موفقیت متصل شد.", "success")
+    except Exception as exc:
+        flash(f"اتصال Instagram ناموفق بود: {exc}", "danger")
+    return redirect(url_for("integrations_page"))
+
+
+@app.post("/integrations/instagram/disconnect")
+@login_required
+def integrations_instagram_disconnect():
+    require_csrf()
+    delete_secret("instagram_sessionid")
+    delete_secret("instagram_username")
+    delete_secret("instagram_user_id")
+    _audit("panel", "instagram_disconnected")
+    flash("اتصال Instagram حذف شد.", "success")
     return redirect(url_for("integrations_page"))
 
 
