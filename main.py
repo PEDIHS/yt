@@ -11,7 +11,7 @@ from config import Config
 from db import SessionLocal, init_db
 from downloader import is_supported_instagram_url
 from jobs import create_job, process_job
-from analytics import get_cached_analytics
+from analytics import get_cached_analytics, get_or_sync_channel_analytics
 from publishing import (
     analyze_peak_slots,
     cancel_scheduled_job,
@@ -125,6 +125,7 @@ def _video_manage_keyboard(channel_id: int, video_id: str) -> InlineKeyboardMark
         ],
         [
             InlineKeyboardButton("💬 Comments", callback_data=f"comments:{channel_id}:{video_id}"),
+            InlineKeyboardButton("🛡 بررسی", callback_data=f"heldcb:{channel_id}:{video_id}"),
             InlineKeyboardButton("📚 Playlist", callback_data=f"vplaylist:{channel_id}:{video_id}"),
         ],
         [
@@ -370,7 +371,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not channel:
         await update.effective_message.reply_text("کانال پیدا نشد. از /channels انتخاب کن.")
         return
-    payload = get_cached_analytics(channel.id, 28) or {}
+    payload, analytics_error = await asyncio.to_thread(get_or_sync_channel_analytics, channel.id, 28)
+    payload = payload or {}
     summary = payload.get("summary", {})
     cfg = publishing_config_payload(channel.id)
     peaks = cfg.get("peak_slots", [])
@@ -1093,8 +1095,13 @@ async def thumbnail_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.effective_message.reply_text("استفاده: /thumbnail VIDEO_ID سپس عکس را ارسال کن.")
         return
+    channel = _selected_channel(update.effective_user.id)
+    if not channel:
+        await update.effective_message.reply_text("ابتدا کانال را از /channels انتخاب کن.")
+        return
     context.user_data["media_action"] = "thumbnail"
     context.user_data["media_video_id"] = context.args[0]
+    context.user_data["media_channel_id"] = channel.id
     await update.effective_message.reply_text("🖼 حالا فایل JPEG/PNG یا عکس Thumbnail را بفرست.")
 
 
@@ -1104,8 +1111,13 @@ async def caption_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 3:
         await update.effective_message.reply_text("استفاده: /caption VIDEO_ID fa نام_زیرنویس سپس فایل Caption را بفرست.")
         return
+    channel = _selected_channel(update.effective_user.id)
+    if not channel:
+        await update.effective_message.reply_text("ابتدا کانال را از /channels انتخاب کن.")
+        return
     context.user_data["media_action"] = "caption"
     context.user_data["media_video_id"] = context.args[0]
+    context.user_data["media_channel_id"] = channel.id
     context.user_data["caption_language"] = context.args[1]
     context.user_data["caption_name"] = " ".join(context.args[2:])
     await update.effective_message.reply_text("📄 حالا فایل Caption را به‌صورت Document بفرست.")
@@ -1118,8 +1130,11 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not action:
         await update.effective_message.reply_text("برای Thumbnail اول /thumbnail VIDEO_ID و برای Caption اول /caption ... را بزن.")
         return
-    channel = _selected_channel(update.effective_user.id)
-    if not channel:
+    channel_id = context.user_data.get("media_channel_id")
+    if not channel_id:
+        channel = _selected_channel(update.effective_user.id)
+        channel_id = channel.id if channel else None
+    if not channel_id:
         await update.effective_message.reply_text("کانال انتخاب نشده.")
         return
     video_id = context.user_data.get("media_video_id")
@@ -1137,7 +1152,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 mime = doc.mime_type or "application/octet-stream"
             else:
                 raise RuntimeError("عکس یا فایل تصویری ارسال کن")
-            await asyncio.to_thread(set_video_thumbnail, channel.id, video_id, data, mime)
+            await asyncio.to_thread(set_video_thumbnail, int(channel_id), video_id, data, mime)
             await update.effective_message.reply_text("✅ Thumbnail روی YouTube بروزرسانی شد.")
         elif action == "caption":
             doc = update.effective_message.document
@@ -1147,7 +1162,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data = bytes(await tg_file.download_as_bytearray())
             await asyncio.to_thread(
                 upload_caption,
-                channel.id,
+                int(channel_id),
                 video_id,
                 content=data,
                 language=context.user_data.get("caption_language", "fa"),
@@ -1158,7 +1173,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as exc:
         await update.effective_message.reply_text(f"❌ {exc}")
     finally:
-        for key in ["media_action","media_video_id","caption_language","caption_name"]:
+        for key in ["media_action","media_video_id","media_channel_id","caption_language","caption_name"]:
             context.user_data.pop(key, None)
 
 
@@ -1253,10 +1268,27 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data["media_action"] = "caption"
         context.user_data["media_video_id"] = pending_caption_setup["video_id"]
+        context.user_data["media_channel_id"] = int(pending_caption_setup["channel_id"])
         context.user_data["caption_language"] = language
         context.user_data["caption_name"] = name
         context.user_data.pop("pending_caption_setup", None)
         await update.effective_message.reply_text("📎 حالا فایل Caption را به‌صورت Document بفرست.")
+        return
+
+    pending_comment_reply = context.user_data.get("pending_comment_reply")
+    if pending_comment_reply:
+        try:
+            await asyncio.to_thread(
+                reply_to_comment,
+                pending_comment_reply["channel_id"],
+                pending_comment_reply["video_id"],
+                pending_comment_reply["comment_id"],
+                text,
+            )
+            context.user_data.pop("pending_comment_reply", None)
+            await update.effective_message.reply_text("✅ پاسخ روی YouTube ارسال شد.")
+        except Exception as exc:
+            await update.effective_message.reply_text(f"❌ ارسال پاسخ ناموفق بود: {exc}")
         return
 
     if is_supported_instagram_url(text):
@@ -1407,9 +1439,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "thumbnail":
             context.user_data["media_action"] = "thumbnail"
             context.user_data["media_video_id"] = video_id
+            context.user_data["media_channel_id"] = int(raw_channel)
             await query.message.reply_text("🖼 تصویر جدید را به‌صورت Photo یا PNG/JPEG Document بفرست.")
         else:
-            context.user_data["pending_caption_setup"] = {"video_id": video_id}
+            context.user_data["pending_caption_setup"] = {"video_id": video_id, "channel_id": int(raw_channel)}
             await query.message.reply_text("📝 Language Code و نام Caption را بفرست؛ مثال:\nfa | Persian")
     elif data.startswith("vkids:"):
         _, raw_channel, video_id = data.split(":", 2)
@@ -1497,10 +1530,97 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             payload = await asyncio.to_thread(list_video_comments, int(raw_channel), video_id, "published")
             items = payload.get("items", [])[:6]
-            text = "\n\n".join(f"• {x['author']}: {x['text'][:160]}\nID: {x['comment_id']}" for x in items) or "Commentی نیست."
-            await query.message.reply_text("💬 " + text)
+            if not items:
+                await query.message.reply_text("Commentی نیست.")
+            for idx, item in enumerate(items):
+                key = f"comment_map_{idx}"
+                context.user_data[key] = {
+                    "channel_id": int(raw_channel),
+                    "video_id": video_id,
+                    "comment_id": item["comment_id"],
+                }
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("↩️ پاسخ", callback_data=f"creply:{idx}"),
+                    InlineKeyboardButton("🗑 حذف", callback_data=f"cdelask:{idx}"),
+                ]])
+                await query.message.reply_text(
+                    f"💬 {item['author']}\n{item['text'][:500]}\n👍 {item['like_count']}",
+                    reply_markup=kb,
+                )
         except Exception as exc:
             await query.message.reply_text(f"❌ {exc}")
+    elif data.startswith("heldcb:"):
+        _, raw_channel, video_id = data.split(":", 2)
+        try:
+            payload = await asyncio.to_thread(list_video_comments, int(raw_channel), video_id, "heldForReview")
+            items = payload.get("items", [])[:6]
+            if not items:
+                await query.message.reply_text("Comment در انتظار بررسی وجود ندارد.")
+            for idx, item in enumerate(items):
+                key = f"held_map_{idx}"
+                context.user_data[key] = {
+                    "channel_id": int(raw_channel),
+                    "video_id": video_id,
+                    "comment_id": item["comment_id"],
+                }
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ تأیید", callback_data=f"capprove:{idx}"),
+                    InlineKeyboardButton("❌ رد", callback_data=f"creject:{idx}"),
+                ]])
+                await query.message.reply_text(
+                    f"🛡 {item['author']}\n{item['text'][:500]}",
+                    reply_markup=kb,
+                )
+        except Exception as exc:
+            await query.message.reply_text(f"❌ {exc}")
+    elif data.startswith("creply:"):
+        idx = int(data.split(":", 1)[1])
+        item = context.user_data.get(f"comment_map_{idx}")
+        if not item:
+            await query.message.reply_text("این Comment منقضی شده؛ لیست Comments را دوباره باز کن.")
+        else:
+            context.user_data["pending_comment_reply"] = item
+            await query.message.reply_text("↩️ متن پاسخ را بفرست. /cancel برای لغو")
+    elif data.startswith("cdelask:"):
+        idx = int(data.split(":", 1)[1])
+        item = context.user_data.get(f"comment_map_{idx}")
+        if not item:
+            await query.message.reply_text("این Comment منقضی شده.")
+        else:
+            context.user_data["pending_comment_delete"] = item
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🗑 حذف قطعی", callback_data="cdelconfirm"),
+                InlineKeyboardButton("لغو", callback_data="noop"),
+            ]])
+            await query.message.reply_text("Comment برای همیشه حذف شود؟", reply_markup=kb)
+    elif data == "cdelconfirm":
+        item = context.user_data.pop("pending_comment_delete", None)
+        if not item:
+            await query.message.reply_text("درخواست حذف منقضی شده.")
+        else:
+            try:
+                await asyncio.to_thread(delete_comment, item["channel_id"], item["video_id"], item["comment_id"])
+                await query.message.reply_text("✅ Comment حذف شد.")
+            except Exception as exc:
+                await query.message.reply_text(f"❌ {exc}")
+    elif data.startswith("capprove:") or data.startswith("creject:"):
+        action, raw_idx = data.split(":", 1)
+        item = context.user_data.get(f"held_map_{int(raw_idx)}")
+        if not item:
+            await query.message.reply_text("این Comment منقضی شده.")
+        else:
+            try:
+                await asyncio.to_thread(
+                    moderate_comment,
+                    item["channel_id"],
+                    item["video_id"],
+                    item["comment_id"],
+                    "published" if action == "capprove" else "rejected",
+                    False,
+                )
+                await query.message.reply_text("✅ وضعیت Comment بروزرسانی شد.")
+            except Exception as exc:
+                await query.message.reply_text(f"❌ {exc}")
     elif data.startswith("delask:"):
         _, raw_channel, video_id = data.split(":", 2)
         kb = InlineKeyboardMarkup([[
