@@ -137,6 +137,26 @@ def build_instagram_cookie_blob(sessionid: str, csrftoken: str = "", ds_user_id:
     return "\n".join(rows) + "\n"
 
 
+def parse_instagram_cookie_blob(raw: str) -> dict:
+    cookies: dict[str, str] = {}
+    allowed = {"sessionid", "csrftoken", "ds_user_id"}
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 7:
+            continue
+        domain, _include_subdomains, _path, _secure, _expires, name, value = parts[:7]
+        if "instagram.com" not in domain.lower():
+            continue
+        if name in allowed and value:
+            cookies[name] = value
+    if not cookies.get("sessionid"):
+        raise ValueError("cookies.txt does not contain an Instagram sessionid")
+    return cookies
+
+
 def validate_instagram_session(sessionid: str, csrftoken: str = "", ds_user_id: str = "") -> dict:
     sessionid = sessionid.strip()
     if not sessionid:
