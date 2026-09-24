@@ -23,7 +23,6 @@ from jobs import (
     create_job,
     enqueue_job,
     mark_job_failed,
-    prepare_long_job_for_schedule,
     resume_reauth_jobs_for_channel,
 )
 from publishing import (
@@ -1301,7 +1300,6 @@ def long_video_upload():
                     )
                     schedule = schedule_job_manual(job.id, scheduled_utc)
                     local_time = utc_to_channel_local(channel_id, schedule.scheduled_for)
-                    prepare_long_job_for_schedule(job.id)
                     _audit(
                         "panel",
                         "long_video_prepare_scheduled",
