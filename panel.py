@@ -247,6 +247,21 @@ def health():
     return jsonify({"ok": True, "service": "yt-panel"})
 
 
+@app.get("/about")
+def public_about():
+    return render_template("public_info.html", page="about")
+
+
+@app.get("/privacy")
+def public_privacy():
+    return render_template("public_info.html", page="privacy")
+
+
+@app.get("/terms")
+def public_terms():
+    return render_template("public_info.html", page="terms")
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
