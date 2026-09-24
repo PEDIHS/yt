@@ -677,6 +677,7 @@ def publish_checked_video(
     video_id: str,
     *,
     privacy: str,
+    content_type: str = "short",
 ) -> dict:
     target_privacy = privacy if privacy in {"public", "unlisted", "private"} else "public"
     service, expected_channel_id, _ = _manager_service(channel_id)
@@ -701,7 +702,11 @@ def publish_checked_video(
             db.commit()
     return {
         "video_id": video_id,
-        "video_url": f"https://youtube.com/shorts/{video_id}",
+        "video_url": (
+            f"https://youtube.com/watch?v={video_id}"
+            if content_type == "long"
+            else f"https://youtube.com/shorts/{video_id}"
+        ),
         "privacy": updated.get("status", {}).get("privacyStatus") or target_privacy,
     }
 
@@ -719,6 +724,15 @@ def upload_to_youtube(
     privacy: Optional[str] = None,
     *,
     force_private: bool = False,
+    content_type: str = "short",
+    tags: Optional[list[str]] = None,
+    category_id: str = "22",
+    made_for_kids: bool = False,
+    embeddable: bool = True,
+    license_name: str = "youtube",
+    notify_subscribers: bool = True,
+    default_language: str = "",
+    audio_language: str = "",
 ) -> dict:
     with SessionLocal() as db:
         channel = db.get(YouTubeChannel, channel_id)
@@ -734,23 +748,35 @@ def upload_to_youtube(
             requested_privacy = "public"
         effective_privacy = "private" if force_private else requested_privacy
 
-        final_title = (title or "YouTube Shorts").strip()
-        full_title = f"{final_title} {hashtags}".strip()[:100]
-        full_description = "\n\n".join(
-            x for x in [description.strip(), hashtags.strip(), "#Shorts"] if x
-        ).strip()
+        is_long = content_type == "long"
+        final_title = (title or ("YouTube Video" if is_long else "YouTube Shorts")).strip()
+        full_title = final_title[:100] if is_long else f"{final_title} {hashtags}".strip()[:100]
+        description_parts = [description.strip(), hashtags.strip()]
+        if not is_long:
+            description_parts.append("#Shorts")
+        full_description = "\n\n".join(x for x in description_parts if x).strip()[:5000]
 
+        clean_tags = [str(tag).strip() for tag in (tags or []) if str(tag).strip()]
         body = {
             "snippet": {
                 "title": full_title,
                 "description": full_description,
-                "categoryId": "22",
+                "categoryId": str(category_id or "22"),
             },
             "status": {
                 "privacyStatus": effective_privacy,
-                "selfDeclaredMadeForKids": False,
+                "selfDeclaredMadeForKids": bool(made_for_kids),
+                "embeddable": bool(embeddable),
+                "license": license_name if license_name in {"youtube", "creativeCommon"} else "youtube",
+                "publicStatsViewable": True,
             },
         }
+        if clean_tags:
+            body["snippet"]["tags"] = clean_tags[:500]
+        if default_language:
+            body["snippet"]["defaultLanguage"] = default_language.strip()[:20]
+        if audio_language:
+            body["snippet"]["defaultAudioLanguage"] = audio_language.strip()[:20]
 
         mime_type, _ = mimetypes.guess_type(file_path)
         if not mime_type or not mime_type.startswith("video/"):
@@ -761,7 +787,12 @@ def upload_to_youtube(
             chunksize=8 * 1024 * 1024,
             resumable=True,
         )
-        request = service.videos().insert(part="snippet,status", body=body, media_body=media)
+        request = service.videos().insert(
+            part="snippet,status",
+            body=body,
+            media_body=media,
+            notifySubscribers=bool(notify_subscribers),
+        )
         response = None
         while response is None:
             _, response = request.next_chunk()
@@ -778,7 +809,11 @@ def upload_to_youtube(
         return {
             "success": True,
             "video_id": video_id,
-            "video_url": f"https://youtube.com/shorts/{video_id}",
+            "video_url": (
+                f"https://youtube.com/watch?v={video_id}"
+                if is_long
+                else f"https://youtube.com/shorts/{video_id}"
+            ),
             "channel_id": channel.id,
             "channel_title": channel.title,
             "privacy": effective_privacy,
