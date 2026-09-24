@@ -210,7 +210,13 @@ def _manager_service(channel_id: int):
 
 
 def _owned_video(service, expected_channel_id: str, video_id: str, part: str = "snippet,status,statistics,contentDetails") -> dict:
-    response = service.videos().list(part=part, id=video_id).execute()
+    # Ownership validation always needs snippet.channelId. Callers may only
+    # need status/statistics, but omitting snippet would create a false
+    # "does not belong" result.
+    requested_parts = [item.strip() for item in (part or "").split(",") if item.strip()]
+    if "snippet" not in requested_parts:
+        requested_parts.insert(0, "snippet")
+    response = service.videos().list(part=",".join(dict.fromkeys(requested_parts)), id=video_id).execute()
     items = response.get("items", [])
     if not items:
         raise RuntimeError("Video not found")
@@ -552,6 +558,24 @@ def delete_caption(channel_id: int, video_id: str, caption_id: str) -> None:
     _owned_video(service, expected_channel_id, video_id, part="snippet")
     service.captions().delete(id=caption_id).execute()
 
+
+
+def publishing_preflight_capability(channel_id: int) -> dict:
+    with SessionLocal() as db:
+        channel = db.get(YouTubeChannel, channel_id)
+        if not channel:
+            raise RuntimeError("Channel not found")
+        creds = credentials_for_channel(db, channel)
+        scopes = granted_scopes(creds)
+
+    upload_ok = YOUTUBE_UPLOAD_SCOPE in scopes or YOUTUBE_MANAGE_SCOPE in scopes or YOUTUBE_FORCE_SSL_SCOPE in scopes
+    manage_ok = YOUTUBE_MANAGE_SCOPE in scopes or YOUTUBE_FORCE_SSL_SCOPE in scopes
+    return {
+        "ok": bool(upload_ok and manage_ok),
+        "upload": bool(upload_ok),
+        "manage": bool(manage_ok),
+        "scopes": sorted(scopes),
+    }
 
 
 def wait_for_video_preflight(
