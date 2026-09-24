@@ -20,11 +20,11 @@ logger = logging.getLogger("analytics")
 
 ALLOWED_PERIODS = {7, 28, 90, 365}
 DAILY_METRICS = (
-    "views,likes,comments,shares,subscribersGained,subscribersLost,"
+    "views,engagedViews,likes,comments,shares,subscribersGained,subscribersLost,"
     "estimatedMinutesWatched,averageViewDuration"
 )
 TOP_VIDEO_METRICS = (
-    "views,likes,comments,shares,subscribersGained,"
+    "views,engagedViews,likes,comments,shares,subscribersGained,"
     "estimatedMinutesWatched,averageViewDuration"
 )
 
@@ -155,6 +155,7 @@ def _summary_from_row(row: dict[str, Any] | None) -> dict[str, Any]:
     lost = _safe_int(row.get("subscribersLost"))
     return {
         "views": _safe_int(row.get("views")),
+        "engaged_views": _safe_int(row.get("engagedViews")),
         "likes": _safe_int(row.get("likes")),
         "comments": _safe_int(row.get("comments")),
         "shares": _safe_int(row.get("shares")),
@@ -272,7 +273,11 @@ def sync_channel_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
         traffic_rows = optional_report(dimensions="insightTrafficSourceType", max_results=10)
         device_rows = optional_report(dimensions="deviceType", max_results=10)
         subscribed_rows = optional_report(dimensions="subscribedStatus", max_results=5)
-        content_type_rows = optional_report(dimensions="creatorContentType", max_results=10)
+        content_type_rows = optional_report(
+            dimensions="creatorContentType",
+            metrics="views,engagedViews,estimatedMinutesWatched",
+            max_results=10,
+        )
 
         latest_ids = _latest_upload_ids(data_service, uploads_playlist_id, 12)
         top_ids = [str(row.get("video") or "") for row in top_rows]
@@ -289,6 +294,7 @@ def sync_channel_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
             daily.append({
                 "date": day_key,
                 "views": _safe_int(row.get("views")),
+                "engaged_views": _safe_int(row.get("engagedViews")),
                 "likes": _safe_int(row.get("likes")),
                 "comments": _safe_int(row.get("comments")),
                 "shares": _safe_int(row.get("shares")),
@@ -307,6 +313,7 @@ def sync_channel_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
             top_videos.append({
                 **detail,
                 "period_views": _safe_int(row.get("views")),
+                "period_engaged_views": _safe_int(row.get("engagedViews")),
                 "period_likes": _safe_int(row.get("likes")),
                 "period_comments": _safe_int(row.get("comments")),
                 "period_shares": _safe_int(row.get("shares")),
@@ -336,6 +343,7 @@ def sync_channel_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
                     {
                         "country": str(row.get("country") or "Unknown"),
                         "views": _safe_int(row.get("views")),
+                        "engaged_views": _safe_int(row.get("engagedViews")),
                         "watch_minutes": _safe_int(row.get("estimatedMinutesWatched")),
                     }
                     for row in country_rows
