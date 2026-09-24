@@ -5,6 +5,7 @@
 {% block subheading %}دانلود از لینک، آماده‌سازی با بالاترین کیفیت، Thumbnail و Metadata کامل، Copyright Preflight و انتشار زمان‌بندی‌شده{% endblock %}
 
 {% block content %}
+{% include "_channel_workspace_nav.html" %}
 <section class="long-video-hero glass-card">
   <div class="long-video-hero-copy">
     <div class="long-video-icon"><i data-lucide="film"></i></div>
@@ -105,7 +106,7 @@
         <select name="channel_id" id="longChannel" required>
           {% for ch in channels %}
           {% set auth = authorization.get(ch.id, {}) %}
-          <option value="{{ ch.id }}" data-manage="{{ '1' if auth.manage or auth.force_ssl else '0' }}">{{ ch.label }} — {{ ch.title }}</option>
+          <option value="{{ ch.id }}" data-manage="{{ '1' if auth.manage or auth.force_ssl else '0' }}" {% if selected_channel_id == ch.id %}selected{% endif %}>{{ ch.label }} — {{ ch.title }}</option>
           {% endfor %}
         </select>
       </label>
