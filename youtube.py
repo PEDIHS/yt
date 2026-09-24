@@ -9,6 +9,7 @@ import logging
 import mimetypes
 import secrets
 from datetime import datetime
+import time
 from typing import Optional
 
 from google.auth.transport.requests import Request as GoogleRequest
@@ -559,6 +560,8 @@ def upload_to_youtube(
     hashtags: str = "",
     description: str = "",
     privacy: Optional[str] = None,
+    *,
+    force_private: bool = False,
 ) -> dict:
     with SessionLocal() as db:
         channel = db.get(YouTubeChannel, channel_id)
@@ -569,9 +572,10 @@ def upload_to_youtube(
 
         creds = credentials_for_channel(db, channel)
         service = youtube_data_service(creds)
-        effective_privacy = privacy or channel.default_privacy
-        if effective_privacy not in {"public", "unlisted", "private"}:
-            effective_privacy = "public"
+        requested_privacy = privacy or channel.default_privacy
+        if requested_privacy not in {"public", "unlisted", "private"}:
+            requested_privacy = "public"
+        effective_privacy = "private" if force_private else requested_privacy
 
         final_title = (title or "YouTube Shorts").strip()
         full_title = f"{final_title} {hashtags}".strip()[:100]
@@ -620,4 +624,5 @@ def upload_to_youtube(
             "channel_id": channel.id,
             "channel_title": channel.title,
             "privacy": effective_privacy,
+            "requested_privacy": requested_privacy,
         }
