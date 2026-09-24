@@ -1331,7 +1331,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
         "🤖 دستورات مدیریت YT Studio\n\n"
         "📺 کانال و آمار\n"
-        "/channels · /channelinfo [id] · /stats [id] · /refresh [id]\n"
+        "/channels · /channelinfo [id] · /stats [id] · /mission [id] · /refresh [id]\n"
         "/connect · /toggle id · /setprivacy id ... · /sethashtags id ...\n\n"
         "✨ انتشار هوشمند\n"
         "/smart · /peaks [id] · /autopost id on|off · /perday id N\n"
