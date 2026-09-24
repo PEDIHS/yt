@@ -83,6 +83,7 @@ def _external_ydl_opts(job_dir: Path | None = None, quality: str = "max") -> dic
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,
         "noplaylist": True,
         "retries": 8,
         "fragment_retries": 8,
@@ -96,6 +97,8 @@ def _external_ydl_opts(job_dir: Path | None = None, quality: str = "max") -> dic
     }
     if job_dir is not None:
         opts["outtmpl"] = str(job_dir / "%(id)s.%(ext)s")
+        free = shutil.disk_usage(DOWNLOAD_DIR).free
+        opts["max_filesize"] = max(0, free - 1024 * 1024 * 1024)
     if Config.FFMPEG_PATH:
         opts["ffmpeg_location"] = Config.FFMPEG_PATH
     return opts
