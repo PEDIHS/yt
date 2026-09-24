@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from analytics import get_or_sync_channel_analytics
 from config import Config
 from db import SessionLocal, init_db
-from jobs import enqueue_job, finalize_prepared_long_job, process_job
+from jobs import enqueue_job, finalize_prepared_long_job, prepare_long_job_for_schedule, process_job
 from models import ChannelPublishingConfig, UploadJob, UploadJobOption, UploadSchedule, YouTubeChannel
 from missions import dispatch_due_mission_reports
 from youtube import list_channel_videos
@@ -557,6 +557,41 @@ def reschedule_channel_queue(channel_id: int) -> int:
     return count
 
 
+def _prepare_pending_long_jobs(limit: int = 2) -> list[int]:
+    with SessionLocal() as db:
+        rows = (
+            db.query(UploadJob, UploadSchedule, UploadJobOption)
+            .join(UploadSchedule, UploadSchedule.job_id == UploadJob.id)
+            .join(UploadJobOption, UploadJobOption.job_id == UploadJob.id)
+            .filter(
+                UploadSchedule.status == "waiting",
+                UploadJob.status.in_(["scheduled", "preparing"]),
+                UploadJobOption.content_type == "long",
+            )
+            .order_by(UploadSchedule.scheduled_for.asc())
+            .limit(limit)
+            .all()
+        )
+        claimed: list[int] = []
+        now = _utcnow()
+        for job, schedule, _option in rows:
+            # A stale "preparing" state with no started_at can be reclaimed
+            # after a service restart; active preparations have started_at set.
+            if job.status == "preparing" and job.started_at is not None:
+                continue
+            if schedule.scheduled_for <= now and job.status == "scheduled":
+                # Due scan will handle it immediately.
+                continue
+            job.status = "preparing"
+            job.error = None
+            claimed.append(job.id)
+        db.commit()
+
+    for job_id in claimed:
+        prepare_long_job_for_schedule(job_id)
+    return claimed
+
+
 def _mark_due_for_release(limit: int = 8) -> list[int]:
     now = _utcnow()
     with SessionLocal() as db:
@@ -585,7 +620,7 @@ def _process_scheduled_job(job_id: int) -> None:
         option = db.get(UploadJobOption, job_id)
         schedule = db.query(UploadSchedule).filter_by(job_id=job_id).one_or_none()
         is_long = bool(option and option.content_type == "long")
-        if is_long and job and job.status in {"downloading", "uploading", "checking"}:
+        if is_long and job and job.status in {"preparing", "downloading", "uploading", "checking"}:
             # Preparation is already running. Never start a second download/upload.
             if schedule:
                 schedule.status = "waiting"
@@ -646,6 +681,10 @@ def run_scheduler() -> None:
     last_analysis_scan = _utcnow() - timedelta(hours=1)
     while True:
         try:
+            prepared_ids = _prepare_pending_long_jobs()
+            if prepared_ids:
+                logger.info("Claimed %s long-video jobs for early preparation", len(prepared_ids))
+
             due_ids = _mark_due_for_release()
             for job_id in due_ids:
                 _scheduler_executor.submit(_process_scheduled_job, job_id)
