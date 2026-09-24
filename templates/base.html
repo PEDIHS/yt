@@ -40,30 +40,15 @@
         <a href="{{ url_for('channels') }}" class="{% if request.endpoint in ['channels','channel_detail'] %}active{% endif %}">
           <i data-lucide="radio-tower"></i><span>کانال‌های YouTube</span>
         </a>
-        <a href="{{ url_for('missions_page') }}" class="{% if request.endpoint and request.endpoint.startswith('missions_') or request.endpoint == 'missions_page' %}active{% endif %}">
-          <i data-lucide="target"></i><span>Mission درآمدزایی</span>
-        </a>
         <a href="{{ url_for('integrations_page') }}" class="{% if request.endpoint and request.endpoint.startswith('integrations_') or request.endpoint == 'integrations_page' %}active{% endif %}">
           <i data-lucide="plug-zap"></i><span>اتصال‌ها و API</span>
         </a>
       </nav>
 
-      <div class="nav-caption">انتشار و عملیات</div>
+      <div class="nav-caption">عملیات سراسری</div>
       <nav class="side-nav">
-        <a href="{{ url_for('videos_manager') }}" class="{% if request.endpoint and (request.endpoint.startswith('video_') or request.endpoint.startswith('playlist_') or request.endpoint == 'videos_manager') %}active{% endif %}">
-          <i data-lucide="clapperboard"></i><span>مدیریت ویدیوها</span>
-        </a>
-        <a href="{{ url_for('publishing_page') }}" class="{% if request.endpoint and (request.endpoint.startswith('publishing_') or request.endpoint.startswith('queue_')) %}active{% endif %}">
-          <i data-lucide="sparkles"></i><span>انتشار هوشمند</span>
-        </a>
-        <a href="{{ url_for('upload') }}" class="{% if request.endpoint == 'upload' %}active{% endif %}">
-          <i data-lucide="send"></i><span>ارسال Shorts</span>
-        </a>
-        <a href="{{ url_for('long_video_upload') }}" class="{% if request.endpoint in ['long_video_upload','api_long_video_probe'] %}active{% endif %}">
-          <i data-lucide="film"></i><span>Long Video Studio</span>
-        </a>
         <a href="{{ url_for('jobs') }}" class="{% if request.endpoint == 'jobs' %}active{% endif %}">
-          <i data-lucide="list-checks"></i><span>Jobها و تاریخچه</span>
+          <i data-lucide="list-checks"></i><span>همه Jobها و تاریخچه</span>
         </a>
       </nav>
 
@@ -97,7 +82,7 @@
         <div class="topbar-actions">
           <div class="api-badge"><span class="status-orb"></span><span>YouTube API</span></div>
           <a class="btn btn-soft desktop-action" href="{{ url_for('channels') }}"><i data-lucide="plus"></i> اتصال کانال</a>
-          <a class="btn btn-primary desktop-action" href="{{ url_for('upload') }}"><i data-lucide="upload-cloud"></i> انتشار جدید</a>
+          <a class="btn btn-primary desktop-action" href="{{ url_for('channels') }}"><i data-lucide="radio-tower"></i> انتخاب کانال</a>
         </div>
       </header>
 
