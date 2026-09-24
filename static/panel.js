@@ -7,6 +7,7 @@
   const grid = "rgba(148, 163, 184, .11)";
   const tooltipBackground = "rgba(10, 13, 22, .96)";
   const charts = [];
+  const hasEcharts = typeof window.echarts !== "undefined";
 
   const readJSON = (id) => {
     const el = document.getElementById(id);
@@ -43,7 +44,7 @@
 
   const makeChart = (id, option) => {
     const element = document.getElementById(id);
-    if (!element || typeof echarts === "undefined") return null;
+    if (!element || !hasEcharts) return null;
     const chart = echarts.init(element, null, { renderer: "canvas" });
     chart.setOption(option);
     charts.push(chart);
@@ -51,7 +52,7 @@
   };
 
   const globalData = readJSON("global-chart-data");
-  if (globalData && Array.isArray(globalData.dates)) {
+  if (hasEcharts && globalData && Array.isArray(globalData.dates)) {
     const series = (globalData.series || []).map((item, index) => ({
       name: item.name,
       type: "line",
@@ -101,7 +102,7 @@
   }
 
   const distribution = readJSON("channel-distribution-data");
-  if (Array.isArray(distribution)) {
+  if (hasEcharts && Array.isArray(distribution)) {
     makeChart("channelMixChart", {
       animationDuration: 700,
       color: palette,
@@ -144,7 +145,7 @@
   }
 
   const globalAudience = readJSON("global-audience-data");
-  if (globalAudience) {
+  if (hasEcharts && globalAudience) {
     const pretty = value => String(value || "Unknown").replaceAll("_", " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 
     const traffic = (globalAudience.traffic_sources || []).slice(0, 10).reverse();
@@ -226,7 +227,7 @@
   }
 
   const channelData = readJSON("channel-analytics-data");
-  if (channelData && Array.isArray(channelData.daily)) {
+  if (hasEcharts && channelData && Array.isArray(channelData.daily)) {
     const daily = channelData.daily;
     const dates = daily.map(item => item.date);
     const views = daily.map(item => Number(item.views || 0));
