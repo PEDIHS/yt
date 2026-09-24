@@ -26,6 +26,7 @@ from publishing import (
     utc_to_channel_local,
 )
 from integrations import claim_telegram_admin, is_telegram_admin, resolve_telegram_token
+from missions import build_channel_mission, mission_report_text
 from models import InstagramDirectShare, OAuthRequest, TelegramPreference, UploadJob, YouTubeChannel
 from security import new_token
 from youtube import (
@@ -201,9 +202,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     selected_text = f"\n📺 کانال انتخاب‌شده: {selected.label}" if selected else "\n⚠️ هنوز کانالی انتخاب نشده."
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📺 کانال‌ها", callback_data="channels"), InlineKeyboardButton("📊 آمار", callback_data="stats")],
-        [InlineKeyboardButton("🎬 ویدیوها", callback_data="videos"), InlineKeyboardButton("✨ انتشار هوشمند", callback_data="smart")],
-        [InlineKeyboardButton("🕓 صف انتشار", callback_data="queue"), InlineKeyboardButton("📤 ارسال محتوا", callback_data="howto")],
-        [InlineKeyboardButton("🧾 ارسال‌های اخیر", callback_data="uploads"), InlineKeyboardButton("➕ اتصال کانال", callback_data="connect")],
+        [InlineKeyboardButton("🎯 Mission درآمدزایی", callback_data="mission"), InlineKeyboardButton("✨ انتشار هوشمند", callback_data="smart")],
+        [InlineKeyboardButton("🎬 ویدیوها", callback_data="videos"), InlineKeyboardButton("🕓 صف انتشار", callback_data="queue")],
+        [InlineKeyboardButton("📤 ارسال محتوا", callback_data="howto"), InlineKeyboardButton("🧾 ارسال‌های اخیر", callback_data="uploads")],
+        [InlineKeyboardButton("➕ اتصال کانال", callback_data="connect")],
     ])
     await update.effective_message.reply_text(
         "🤖 مدیریت چندکاناله YouTube Shorts\n"
@@ -225,6 +227,43 @@ async def channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state = "فعال" if ch.is_active else "غیرفعال"
         lines.append(f"#{ch.id} · {ch.label} · {ch.title} · {state} · {ch.video_count:,} ویدیو")
     await update.effective_message.reply_text("\n".join(lines), reply_markup=_channel_keyboard(active_only=True))
+
+
+async def mission_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    channel = None
+    if context.args:
+        try:
+            channel_id = int(context.args[0])
+            with SessionLocal() as db:
+                channel = db.get(YouTubeChannel, channel_id)
+        except (TypeError, ValueError):
+            channel = None
+    else:
+        channel = _selected_channel(update.effective_user.id)
+
+    if not channel:
+        await update.effective_message.reply_text(
+            "ابتدا از /channels یک کانال انتخاب کن یا /mission CHANNEL_ID را بزن."
+        )
+        return
+
+    try:
+        mission = await asyncio.to_thread(build_channel_mission, channel.id)
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "🎯 Mission Center",
+                url=f"{Config.PUBLIC_BASE_URL}/missions",
+            )
+        ]])
+        await update.effective_message.reply_text(
+            mission_report_text(mission),
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:
+        await update.effective_message.reply_text(f"❌ Mission محاسبه نشد: {exc}")
 
 
 async def connect_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1487,6 +1526,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("یک لینک Instagram Reel/Post بفرست؛ سپس عنوان را ارسال کن. مقصد همان کانال انتخاب‌شده در /channels است.")
     elif data == "stats":
         await stats_command(update, context)
+    elif data == "mission":
+        await mission_command(update, context)
     elif data == "videos":
         await videos_command(update, context)
     elif data == "smart":
@@ -2127,6 +2168,7 @@ async def _post_init(application: Application) -> None:
         BotCommand("start", "منوی اصلی مدیریت"),
         BotCommand("channels", "لیست و انتخاب کانال"),
         BotCommand("stats", "آمار کانال انتخاب‌شده"),
+        BotCommand("mission", "Mission درآمدزایی کانال"),
         BotCommand("smart", "وضعیت انتشار هوشمند"),
         BotCommand("queue", "صف ویدیوهای در انتظار"),
         BotCommand("bulk", "افزودن گروهی به صف هوشمند"),
@@ -2167,6 +2209,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("sethashtags", hashtags_command))
     app.add_handler(CommandHandler("refresh", refresh_command))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("mission", mission_command))
     app.add_handler(CommandHandler("smart", smart_command))
     app.add_handler(CommandHandler("autopost", autopost_command))
     app.add_handler(CommandHandler("perday", perday_command))
