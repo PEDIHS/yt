@@ -1,11 +1,18 @@
 {% extends "base.html" %}
 {% block title %}Jobها | YT Manager{% endblock %}
 {% block heading %}تاریخچه ارسال{% endblock %}
-{% block subheading %}وضعیت دانلود، آپلود، خطاها و لینک خروجی{% endblock %}
+{% block subheading %}وضعیت Shorts و Long-form از دانلود و Preflight تا انتشار نهایی{% endblock %}
 {% block content %}
-<div class="filters"><a class="pill {% if not selected_status %}active-filter{% endif %}" href="{{ url_for('jobs') }}">همه</a>{% for s in ['queued','scheduled','downloading','uploading','completed','failed','cancelled'] %}<a class="pill status-{{ s }} {% if selected_status==s %}active-filter{% endif %}" href="{{ url_for('jobs', status=s) }}">{{ s }}</a>{% endfor %}</div>
+<div class="filters"><a class="pill {% if not selected_status %}active-filter{% endif %}" href="{{ url_for('jobs') }}">همه</a>{% for s in ['queued','scheduled','ready_scheduled','downloading','uploading','checking','reauth_required','copyright_blocked','preflight_blocked','completed','failed','cancelled'] %}<a class="pill status-{{ s }} {% if selected_status==s %}active-filter{% endif %}" href="{{ url_for('jobs', status=s) }}">{{ s }}</a>{% endfor %}</div>
 <section class="card table-card"><div class="table-wrap"><table><thead><tr><th>Job</th><th>کانال</th><th>عنوان</th><th>منبع</th><th>وضعیت</th><th>زمان</th><th>خروجی</th></tr></thead><tbody>
-{% for job in jobs %}<tr><td>#{{ job.id }}</td><td>{{ channel_map.get(job.channel_id).label if channel_map.get(job.channel_id) else job.channel_id }}</td><td><strong>{{ job.title }}</strong>{% if job.error %}<small class="error-text">{{ job.error }}</small>{% endif %}</td><td>{{ job.source }}</td><td><span class="pill status-{{ job.status }}">{{ job.status }}</span></td><td>{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</td><td>{% if job.video_url %}<a href="{{ job.video_url }}" target="_blank" rel="noopener">مشاهده Short</a>{% else %}—{% endif %}</td></tr>{% else %}<tr><td colspan="7" class="empty">هیچ Jobی وجود ندارد.</td></tr>{% endfor %}
+{% for job in jobs %}<tr><td>#{{ job.id }}</td><td>{{ channel_map.get(job.channel_id).label if channel_map.get(job.channel_id) else job.channel_id }}</td><td><strong>{{ job.title }}</strong>{% if job.error %}<small class="error-text">{{ job.error }}</small>{% endif %}</td><td>
+  {% if job.source == 'panel-long' %}
+    <span class="job-type long"><i data-lucide="film"></i>Long</span>
+  {% else %}
+    <span class="job-type short"><i data-lucide="smartphone"></i>Short</span>
+  {% endif %}
+  <small>{{ job.source }}</small>
+</td><td><span class="pill status-{{ job.status }}">{{ job.status }}</span></td><td>{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</td><td>{% if job.video_url %}<a href="{{ job.video_url }}" target="_blank" rel="noopener">{{ 'مشاهده ویدیو' if job.source == 'panel-long' else 'مشاهده Short' }}</a>{% else %}—{% endif %}</td></tr>{% else %}<tr><td colspan="7" class="empty">هیچ Jobی وجود ندارد.</td></tr>{% endfor %}
 </tbody></table></div></section>
 {% endblock %}
 {% block scripts %}<script>setTimeout(()=>location.reload(),12000)</script>{% endblock %}
