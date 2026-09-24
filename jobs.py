@@ -619,6 +619,29 @@ def enqueue_job(job_id: int):
     return _executor.submit(process_job, job_id)
 
 
+def _sync_reauth_schedule_result(job_id: int, result: dict) -> dict:
+    with SessionLocal() as db:
+        schedule = db.query(UploadSchedule).filter_by(job_id=job_id).one_or_none()
+        if not schedule:
+            return result
+        if result.get("prepared"):
+            schedule.status = "waiting"
+            schedule.released_at = None
+        elif result.get("success"):
+            schedule.status = "released"
+            schedule.released_at = datetime.utcnow()
+        elif result.get("blocked"):
+            schedule.status = "blocked"
+            schedule.released_at = datetime.utcnow()
+        elif result.get("needs_reauth"):
+            schedule.status = "reauth_required"
+        else:
+            schedule.status = "failed"
+            schedule.released_at = datetime.utcnow()
+        db.commit()
+    return result
+
+
 def resume_reauth_job(job_id: int) -> dict:
     with SessionLocal() as db:
         job = db.get(UploadJob, job_id)
@@ -653,8 +676,14 @@ def resume_reauth_job(job_id: int) -> dict:
                     if row and row.status == "reauth_required":
                         row.status = "waiting"
                         db.commit()
-                return _process_long_job(job_id, hold_after_check=True)
-            return _process_long_job(job_id, hold_after_check=False)
+                return _sync_reauth_schedule_result(
+                    job_id,
+                    _process_long_job(job_id, hold_after_check=True),
+                )
+            return _sync_reauth_schedule_result(
+                job_id,
+                _process_long_job(job_id, hold_after_check=False),
+            )
 
         if schedule_is_future:
             try:
@@ -684,13 +713,13 @@ def resume_reauth_job(job_id: int) -> dict:
                     db.commit()
                 _cleanup_long_asset(job_id)
                 _send_telegram_job_event(job_id, event="ready_scheduled")
-                return {
+                return _sync_reauth_schedule_result(job_id, {
                     "success": True,
                     "prepared": True,
                     "job_id": job_id,
                     "video_id": video_id,
                     "video_url": f"https://youtube.com/watch?v={video_id}",
-                }
+                })
             except Exception as exc:
                 logger.exception("Could not resume scheduled long Job %s", job_id)
                 with SessionLocal() as db:
@@ -701,7 +730,10 @@ def resume_reauth_job(job_id: int) -> dict:
                         db.commit()
                 return {"success": False, "job_id": job_id, "error": str(exc)}
 
-        return finalize_prepared_long_job(job_id)
+        return _sync_reauth_schedule_result(
+            job_id,
+            finalize_prepared_long_job(job_id),
+        )
 
     if not video_id:
         with SessionLocal() as db:
