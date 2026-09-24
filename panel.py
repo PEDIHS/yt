@@ -18,7 +18,7 @@ from analytics import (
 from config import Config
 from db import SessionLocal, init_db
 from downloader import is_supported_instagram_url
-from jobs import create_job, enqueue_job, mark_job_failed
+from jobs import create_job, enqueue_job, mark_job_failed, resume_reauth_jobs_for_channel
 from publishing import (
     analyze_peak_slots,
     cancel_scheduled_job,
@@ -603,7 +603,12 @@ def oauth_callback():
                 if req:
                     req.used_at = datetime.utcnow()
                     db.commit()
-            message = f"کانال {channel.title} با موفقیت متصل شد. حالا به Telegram برگرد و /channels را بزن."
+            resumed = resume_reauth_jobs_for_channel(channel.id)
+            message = f"کانال {channel.title} با دسترسی جدید متصل شد."
+            if resumed:
+                message += f" ادامه خودکار Jobهای در انتظار شروع شد: {', '.join('#'+str(x) for x in resumed)}"
+            else:
+                message += " حالا به Telegram برگرد و /channels را بزن."
             session.pop("oauth_request_token", None)
             session.pop("oauth_state", None)
             return render_template("oauth_success.html", channel=channel, message=message)
@@ -618,7 +623,18 @@ def oauth_callback():
         session.pop("oauth_state", None)
         session.pop("oauth_label", None)
         session.pop("oauth_mode", None)
-        _audit("panel", "channel_connected", f"channel_id={channel.id}; analytics_synced={analytics_synced}")
+        resumed = resume_reauth_jobs_for_channel(channel.id)
+        _audit(
+            "panel",
+            "channel_connected",
+            f"channel_id={channel.id}; analytics_synced={analytics_synced}; resumed_jobs={resumed}",
+        )
+        if resumed:
+            flash(
+                "Jobهای متوقف‌شده به‌خاطر OAuth به‌صورت خودکار ادامه داده شدند: "
+                + ", ".join(f"#{job_id}" for job_id in resumed),
+                "success",
+            )
         return redirect(url_for("channels"))
     except Exception as exc:
         logger.exception("OAuth callback failed")
