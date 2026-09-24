@@ -553,6 +553,123 @@ def delete_caption(channel_id: int, video_id: str, caption_id: str) -> None:
     service.captions().delete(id=caption_id).execute()
 
 
+
+def wait_for_video_preflight(
+    channel_id: int,
+    video_id: str,
+    *,
+    timeout_seconds: int = 600,
+    poll_seconds: int = 10,
+) -> dict:
+    """Wait for API-visible YouTube processing/rejection signals."""
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    deadline = time.monotonic() + max(30, int(timeout_seconds))
+    last_payload: dict = {}
+
+    while time.monotonic() < deadline:
+        response = service.videos().list(
+            part="snippet,status,processingDetails",
+            id=video_id,
+            maxResults=1,
+        ).execute()
+        items = response.get("items", [])
+        if not items:
+            return {
+                "ok": False,
+                "blocked": True,
+                "copyright_signal": False,
+                "reason": "video_missing_after_upload",
+                "detail": "Uploaded video is no longer available on YouTube.",
+            }
+
+        item = items[0]
+        if item.get("snippet", {}).get("channelId") != expected_channel_id:
+            raise PermissionError("Video does not belong to this channel")
+
+        status = item.get("status", {}) or {}
+        processing = item.get("processingDetails", {}) or {}
+        processing_status = processing.get("processingStatus") or ""
+        rejection_reason = status.get("rejectionReason") or ""
+        upload_status = status.get("uploadStatus") or ""
+        failure_reason = processing.get("processingFailureReason") or ""
+
+        last_payload = {
+            "processing_status": processing_status,
+            "upload_status": upload_status,
+            "rejection_reason": rejection_reason,
+            "failure_reason": failure_reason,
+        }
+        reason_text = " ".join(
+            str(x).lower()
+            for x in [rejection_reason, failure_reason, upload_status]
+            if x
+        )
+        copyright_signal = any(
+            marker in reason_text
+            for marker in ("copyright", "claim", "duplicate")
+        )
+
+        if rejection_reason or processing_status in {"failed", "terminated"}:
+            return {
+                "ok": False,
+                "blocked": True,
+                "copyright_signal": copyright_signal,
+                "reason": rejection_reason or failure_reason or processing_status,
+                "detail": last_payload,
+            }
+
+        if processing_status == "succeeded":
+            return {
+                "ok": True,
+                "blocked": False,
+                "copyright_signal": False,
+                "reason": "",
+                "detail": last_payload,
+            }
+
+        time.sleep(max(2, int(poll_seconds)))
+
+    return {
+        "ok": False,
+        "blocked": True,
+        "copyright_signal": False,
+        "reason": "copyright_check_timeout",
+        "detail": last_payload,
+    }
+
+
+def publish_checked_video(
+    channel_id: int,
+    video_id: str,
+    *,
+    privacy: str,
+) -> dict:
+    target_privacy = privacy if privacy in {"public", "unlisted", "private"} else "public"
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    current = _owned_video(service, expected_channel_id, video_id, part="status")
+    status = current.get("status", {}) or {}
+    body = {
+        "id": video_id,
+        "status": {
+            "privacyStatus": target_privacy,
+            "selfDeclaredMadeForKids": bool(status.get("selfDeclaredMadeForKids", False)),
+        },
+    }
+    for key in ("embeddable", "license", "publicStatsViewable"):
+        if key in status:
+            body["status"][key] = status[key]
+    updated = service.videos().update(part="status", body=body).execute()
+    return {
+        "video_id": video_id,
+        "video_url": f"https://youtube.com/shorts/{video_id}",
+        "privacy": updated.get("status", {}).get("privacyStatus") or target_privacy,
+    }
+
+
+def discard_preflight_video(channel_id: int, video_id: str) -> None:
+    delete_video(channel_id, video_id)
+
+
 def upload_to_youtube(
     file_path: str,
     channel_id: int,
