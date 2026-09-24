@@ -85,6 +85,29 @@ class UploadJob(Base):
     channel: Mapped[YouTubeChannel] = relationship(back_populates="jobs")
 
 
+class UploadJobOption(Base):
+    __tablename__ = "upload_job_options"
+
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("upload_jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    content_type: Mapped[str] = mapped_column(String(20), default="short", nullable=False)
+    quality: Mapped[str] = mapped_column(String(20), default="max", nullable=False)
+    tags: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    category_id: Mapped[str] = mapped_column(String(10), default="22", nullable=False)
+    made_for_kids: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    embeddable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    license: Mapped[str] = mapped_column(String(30), default="youtube", nullable=False)
+    notify_subscribers: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    default_language: Mapped[str] = mapped_column(String(20), default="", nullable=False)
+    audio_language: Mapped[str] = mapped_column(String(20), default="", nullable=False)
+    thumbnail_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_metadata_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    prepared_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class TelegramPreference(Base):
     __tablename__ = "telegram_preferences"
 
