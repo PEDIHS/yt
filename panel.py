@@ -55,7 +55,7 @@ from integrations import (
     telegram_admin_count,
     validate_telegram_token,
 )
-from models import AuditLog, OAuthRequest, UploadJob, YouTubeChannel
+from models import AuditLog, OAuthRequest, UploadJob, UploadJobOption, UploadSchedule, YouTubeChannel
 from missions import build_channel_mission, set_mission_settings
 from security import credentials_match, csrf_token, login_required, require_csrf
 from youtube import (
@@ -281,8 +281,44 @@ def dashboard():
         channels = db.query(YouTubeChannel).order_by(YouTubeChannel.id.asc()).all()
         channel_map = {channel.id: channel for channel in channels}
         recent_jobs = db.query(UploadJob).order_by(UploadJob.id.desc()).limit(8).all()
+        operational = {
+            "scheduled": db.query(func.count(UploadSchedule.id)).filter(
+                UploadSchedule.status.in_(["waiting", "releasing"])
+            ).scalar() or 0,
+            "inflight": db.query(func.count(UploadJob.id)).filter(
+                UploadJob.status.in_(["preparing", "downloading", "uploading", "checking"])
+            ).scalar() or 0,
+            "ready": db.query(func.count(UploadJob.id)).filter(
+                UploadJob.status == "ready_scheduled"
+            ).scalar() or 0,
+            "copyright_blocked": db.query(func.count(UploadJob.id)).filter(
+                UploadJob.status == "copyright_blocked"
+            ).scalar() or 0,
+            "reauth_required": db.query(func.count(UploadJob.id)).filter(
+                UploadJob.status == "reauth_required"
+            ).scalar() or 0,
+        }
 
     analytics_map, coverage, period_summary, period_changes, global_chart, distribution, audience_rollup = _dashboard_analytics(channels, days)
+    channel_ranking = []
+    for channel in channels:
+        payload = analytics_map.get(channel.id) or {}
+        row = payload.get("summary", {}) or {}
+        channel_ranking.append({
+            "channel": channel,
+            "views": int(row.get("views", 0) or 0),
+            "likes": int(row.get("likes", 0) or 0),
+            "comments": int(row.get("comments", 0) or 0),
+            "subscribers_net": int(row.get("subscribers_net", 0) or 0),
+            "watch_minutes": int(row.get("watch_minutes", 0) or 0),
+        })
+    channel_ranking.sort(
+        key=lambda item: (item["views"], item["likes"], item["subscribers_net"]),
+        reverse=True,
+    )
+    for index, item in enumerate(channel_ranking, start=1):
+        item["rank"] = index
+
     lifetime = {
         "views": sum(int(channel.view_count or 0) for channel in channels),
         "subscribers": sum(int(channel.subscriber_count or 0) for channel in channels),
@@ -307,6 +343,8 @@ def dashboard():
         distribution=distribution,
         audience_rollup=audience_rollup,
         lifetime=lifetime,
+        operational=operational,
+        channel_ranking=channel_ranking,
     )
 
 
@@ -488,8 +526,13 @@ def integrations_google():
 @app.get("/missions")
 @login_required
 def missions_page():
+    selected_channel_id = request.args.get("channel_id", type=int)
     with SessionLocal() as db:
-        channels = db.query(YouTubeChannel).order_by(YouTubeChannel.id.asc()).all()
+        query = db.query(YouTubeChannel).order_by(YouTubeChannel.id.asc())
+        if selected_channel_id:
+            query = query.filter(YouTubeChannel.id == selected_channel_id)
+        channels = query.all()
+    workspace_channel = channels[0] if selected_channel_id and channels else None
 
     missions = {}
     errors = {}
@@ -512,6 +555,7 @@ def missions_page():
         channels=channels,
         missions=missions,
         mission_errors=errors,
+        workspace_channel=workspace_channel,
     )
 
 
@@ -524,7 +568,7 @@ def missions_refresh(channel_id: int):
         flash("Mission با تازه‌ترین Analytics بروزرسانی شد.", "success")
     except Exception as exc:
         flash(f"Mission بروزرسانی نشد: {exc}", "danger")
-    return redirect(url_for("missions_page"))
+    return redirect(url_for("missions_page", channel_id=channel_id))
 
 
 @app.post("/missions/<int:channel_id>/settings")
@@ -539,7 +583,7 @@ def missions_settings(channel_id: int):
     daily_report = request.form.get("daily_report") == "on"
     set_mission_settings(channel_id, enabled=enabled, daily_report=daily_report)
     flash("تنظیمات Mission ذخیره شد.", "success")
-    return redirect(url_for("missions_page"))
+    return redirect(url_for("missions_page", channel_id=channel_id))
 
 
 @app.get("/channels")
@@ -677,6 +721,37 @@ def channel_detail(channel_id: int):
 
     with SessionLocal() as db:
         channel = db.get(YouTubeChannel, channel_id)
+        channel_jobs = {
+            "completed": db.query(func.count(UploadJob.id)).filter(
+                UploadJob.channel_id == channel_id,
+                UploadJob.status == "completed",
+            ).scalar() or 0,
+            "scheduled": db.query(func.count(UploadSchedule.id)).filter(
+                UploadSchedule.channel_id == channel_id,
+                UploadSchedule.status.in_(["waiting", "releasing"]),
+            ).scalar() or 0,
+            "active": db.query(func.count(UploadJob.id)).filter(
+                UploadJob.channel_id == channel_id,
+                UploadJob.status.in_(["preparing", "downloading", "uploading", "checking"]),
+            ).scalar() or 0,
+            "blocked": db.query(func.count(UploadJob.id)).filter(
+                UploadJob.channel_id == channel_id,
+                UploadJob.status.in_(["copyright_blocked", "preflight_blocked"]),
+            ).scalar() or 0,
+        }
+        recent_channel_jobs = (
+            db.query(UploadJob)
+            .filter(UploadJob.channel_id == channel_id)
+            .order_by(UploadJob.id.desc())
+            .limit(6)
+            .all()
+        )
+    upcoming_queue = queue_snapshot(channel_id=channel_id, limit=6)
+    for item in upcoming_queue:
+        try:
+            item["scheduled_local"] = utc_to_channel_local(channel_id, item["scheduled_for"])
+        except Exception:
+            item["scheduled_local"] = item["scheduled_for"]
 
     return render_template(
         "channel_detail.html",
@@ -685,6 +760,9 @@ def channel_detail(channel_id: int):
         analytics_error=analytics_error,
         authorization=authorization,
         selected_days=days,
+        channel_jobs=channel_jobs,
+        recent_channel_jobs=recent_channel_jobs,
+        upcoming_queue=upcoming_queue,
     )
 
 
@@ -1052,21 +1130,31 @@ def video_caption_delete(channel_id: int, video_id: str, caption_id: str):
 @app.get("/publishing")
 @login_required
 def publishing_page():
+    selected_channel_id = request.args.get("channel_id", type=int)
     with SessionLocal() as db:
-        channels_list = db.query(YouTubeChannel).order_by(YouTubeChannel.label.asc()).all()
+        query = db.query(YouTubeChannel).order_by(YouTubeChannel.label.asc())
+        if selected_channel_id:
+            query = query.filter(YouTubeChannel.id == selected_channel_id)
+        channels_list = query.all()
     configs = {}
     for channel in channels_list:
         try:
             configs[channel.id] = publishing_config_payload(channel.id)
         except Exception as exc:
             configs[channel.id] = {"error": str(exc)}
-    queue = queue_snapshot(limit=150)
+    queue = queue_snapshot(channel_id=selected_channel_id, limit=150)
     for item in queue:
         try:
             item["scheduled_local"] = utc_to_channel_local(item["channel_id"], item["scheduled_for"])
         except Exception:
             item["scheduled_local"] = item["scheduled_for"]
-    return render_template("publishing.html", channels=channels_list, configs=configs, queue=queue)
+    return render_template(
+        "publishing.html",
+        channels=channels_list,
+        configs=configs,
+        queue=queue,
+        workspace_channel=(channels_list[0] if selected_channel_id and channels_list else None),
+    )
 
 
 @app.post("/publishing/<int:channel_id>/settings")
@@ -1095,7 +1183,7 @@ def publishing_settings(channel_id: int):
         _audit("panel", "publishing_settings_updated", f"channel_id={channel_id}")
     except Exception as exc:
         flash(f"ذخیره تنظیمات انتشار ناموفق بود: {exc}", "danger")
-    return redirect(url_for("publishing_page"))
+    return redirect(url_for("publishing_page", channel_id=channel_id))
 
 
 @app.post("/publishing/<int:channel_id>/analyze")
@@ -1108,7 +1196,7 @@ def publishing_analyze(channel_id: int):
         flash(f"تحلیل پیک بروزرسانی شد؛ {result.get('video_samples', 0)} ویدیو بررسی شد.", "success")
     except Exception as exc:
         flash(f"تحلیل زمان پیک ناموفق بود: {exc}", "danger")
-    return redirect(url_for("publishing_page"))
+    return redirect(url_for("publishing_page", channel_id=channel_id))
 
 
 @app.post("/publishing/<int:channel_id>/bulk")
@@ -1151,7 +1239,7 @@ def publishing_bulk_queue(channel_id: int):
     if errors:
         flash(" | ".join(errors[:5]), "warning")
     _audit("panel", "publishing_bulk_queued", f"channel_id={channel_id}; created={created}; errors={len(errors)}")
-    return redirect(url_for("publishing_page"))
+    return redirect(url_for("publishing_page", channel_id=channel_id))
 
 
 @app.post("/queue/<int:job_id>/publish-now")
@@ -1164,7 +1252,7 @@ def queue_publish_now(job_id: int):
         _audit("panel", "scheduled_job_released", f"job_id={job_id}")
     except Exception as exc:
         flash(f"انتشار فوری ناموفق بود: {exc}", "danger")
-    return redirect(url_for("publishing_page"))
+    return redirect(url_for("publishing_page", channel_id=channel_id))
 
 
 @app.post("/queue/<int:job_id>/cancel")
@@ -1177,7 +1265,7 @@ def queue_cancel(job_id: int):
         _audit("panel", "scheduled_job_cancelled", f"job_id={job_id}")
     except Exception as exc:
         flash(f"لغو Job ناموفق بود: {exc}", "danger")
-    return redirect(url_for("publishing_page"))
+    return redirect(url_for("publishing_page", channel_id=channel_id))
 
 
 @app.post("/api/long-videos/probe")
@@ -1328,6 +1416,7 @@ def long_video_upload():
         channels=channels_list,
         channel_configs=channel_configs,
         authorization=authorization,
+        selected_channel_id=request.args.get("channel_id", type=int),
     )
 
 
@@ -1376,14 +1465,14 @@ def upload():
                     local_time = utc_to_channel_local(channel_id, schedule.scheduled_for)
                     flash(f"Job #{job.id} برای {local_time.strftime('%Y-%m-%d %H:%M')} وارد صف هوشمند شد.", "success")
                     _audit("panel", "upload_smart_scheduled", f"job_id={job.id}; channel_id={channel_id}")
-                    return redirect(url_for("publishing_page"))
+                    return redirect(url_for("publishing_page", channel_id=channel_id))
                 if publish_mode == "manual":
                     scheduled_utc = local_datetime_to_utc(channel_id, request.form.get("scheduled_at", ""))
                     schedule = schedule_job_manual(job.id, scheduled_utc)
                     local_time = utc_to_channel_local(channel_id, schedule.scheduled_for)
                     flash(f"Job #{job.id} برای {local_time.strftime('%Y-%m-%d %H:%M')} زمان‌بندی شد.", "success")
                     _audit("panel", "upload_manual_scheduled", f"job_id={job.id}; channel_id={channel_id}")
-                    return redirect(url_for("publishing_page"))
+                    return redirect(url_for("publishing_page", channel_id=channel_id))
 
                 enqueue_job(job.id)
                 _audit("panel", "upload_queued", f"job_id={job.id}; channel_id={channel_id}")
@@ -1393,15 +1482,22 @@ def upload():
                 if job is not None:
                     mark_job_failed(job.id, f"Scheduling failed: {exc}")
                 flash(f"ثبت ارسال ناموفق بود: {exc}", "danger")
-    return render_template("upload.html", channels=channels_list)
+    return render_template(
+        "upload.html",
+        channels=channels_list,
+        selected_channel_id=request.args.get("channel_id", type=int),
+    )
 
 
 @app.get("/jobs")
 @login_required
 def jobs():
     status = request.args.get("status", "").strip()
+    selected_channel_id = request.args.get("channel_id", type=int)
     with SessionLocal() as db:
         query = db.query(UploadJob)
+        if selected_channel_id:
+            query = query.filter(UploadJob.channel_id == selected_channel_id)
         if status in {
             "queued", "scheduled", "preparing", "ready_scheduled", "cancelled", "downloading",
             "uploading", "checking", "completed", "failed", "reauth_required",
@@ -1409,8 +1505,17 @@ def jobs():
         }:
             query = query.filter(UploadJob.status == status)
         rows = query.order_by(UploadJob.id.desc()).limit(Config.MAX_UPLOAD_HISTORY).all()
-        channel_map = {c.id: c for c in db.query(YouTubeChannel).all()}
-    return render_template("jobs.html", jobs=rows, channel_map=channel_map, selected_status=status)
+        all_channels = db.query(YouTubeChannel).order_by(YouTubeChannel.label.asc()).all()
+        channel_map = {c.id: c for c in all_channels}
+        selected_channel = channel_map.get(selected_channel_id) if selected_channel_id else None
+    return render_template(
+        "jobs.html",
+        jobs=rows,
+        channel_map=channel_map,
+        selected_status=status,
+        selected_channel=selected_channel,
+        selected_channel_id=selected_channel_id,
+    )
 
 
 @app.get("/api/jobs/<int:job_id>")
