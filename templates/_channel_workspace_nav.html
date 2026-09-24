@@ -1,0 +1,25 @@
+{% if workspace_channel %}
+<nav class="channel-workspace-nav glass-card" aria-label="Channel workspace">
+  <div class="channel-workspace-profile">
+    {% if workspace_channel.thumbnail_url %}
+      <img src="{{ workspace_channel.thumbnail_url }}" alt="{{ workspace_channel.title }}">
+    {% else %}
+      <div class="avatar">YT</div>
+    {% endif %}
+    <div>
+      <span class="section-kicker">CHANNEL WORKSPACE</span>
+      <strong>{{ workspace_channel.label }}</strong>
+      <small>{{ workspace_channel.title }}</small>
+    </div>
+  </div>
+  <div class="channel-workspace-links">
+    <a href="{{ url_for('channel_detail', channel_id=workspace_channel.id) }}" class="{% if request.endpoint == 'channel_detail' %}active{% endif %}"><i data-lucide="layout-dashboard"></i>Overview</a>
+    <a href="{{ url_for('videos_manager', channel_id=workspace_channel.id) }}" class="{% if request.endpoint in ['videos_manager','video_detail'] %}active{% endif %}"><i data-lucide="clapperboard"></i>Videos</a>
+    <a href="{{ url_for('publishing_page', channel_id=workspace_channel.id) }}" class="{% if request.endpoint == 'publishing_page' %}active{% endif %}"><i data-lucide="calendar-range"></i>Queue</a>
+    <a href="{{ url_for('upload', channel_id=workspace_channel.id) }}" class="{% if request.endpoint == 'upload' %}active{% endif %}"><i data-lucide="smartphone"></i>Shorts</a>
+    <a href="{{ url_for('long_video_upload', channel_id=workspace_channel.id) }}" class="{% if request.endpoint == 'long_video_upload' %}active{% endif %}"><i data-lucide="film"></i>Long Video</a>
+    <a href="{{ url_for('missions_page', channel_id=workspace_channel.id) }}" class="{% if request.endpoint == 'missions_page' %}active{% endif %}"><i data-lucide="target"></i>Mission</a>
+    <a href="{{ url_for('jobs', channel_id=workspace_channel.id) }}" class="{% if request.endpoint == 'jobs' %}active{% endif %}"><i data-lucide="list-checks"></i>Jobs</a>
+  </div>
+</nav>
+{% endif %}
