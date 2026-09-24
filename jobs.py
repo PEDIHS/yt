@@ -532,8 +532,28 @@ def _process_long_job(job_id: int, *, hold_after_check: bool = False) -> dict:
         cleanup_download(file_path)
 
 
+def _prepare_scheduled_long_job(job_id: int) -> dict:
+    result = _process_long_job(job_id, hold_after_check=True)
+    with SessionLocal() as db:
+        schedule = db.query(UploadSchedule).filter_by(job_id=job_id).one_or_none()
+        if schedule:
+            if result.get("prepared"):
+                # Keep it eligible for the normal due-time release scan.
+                schedule.status = "waiting"
+            elif result.get("blocked"):
+                schedule.status = "blocked"
+                schedule.released_at = datetime.utcnow()
+            elif result.get("needs_reauth"):
+                schedule.status = "reauth_required"
+            else:
+                schedule.status = "failed"
+                schedule.released_at = datetime.utcnow()
+            db.commit()
+    return result
+
+
 def prepare_long_job_for_schedule(job_id: int):
-    return _executor.submit(_process_long_job, job_id, hold_after_check=True)
+    return _executor.submit(_prepare_scheduled_long_job, job_id)
 
 
 def finalize_prepared_long_job(job_id: int) -> dict:
