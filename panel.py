@@ -1403,7 +1403,7 @@ def jobs():
     with SessionLocal() as db:
         query = db.query(UploadJob)
         if status in {
-            "queued", "scheduled", "ready_scheduled", "cancelled", "downloading",
+            "queued", "scheduled", "preparing", "ready_scheduled", "cancelled", "downloading",
             "uploading", "checking", "completed", "failed", "reauth_required",
             "copyright_blocked", "preflight_blocked",
         }:
