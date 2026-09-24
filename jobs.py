@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import httpx
@@ -11,10 +11,12 @@ from config import Config
 from db import SessionLocal
 from downloader import cleanup_download, download_video
 from integrations import get_secret, resolve_telegram_token
-from models import InstagramDirectShare, TelegramAdmin, UploadJob, YouTubeChannel
+from models import InstagramDirectShare, OAuthRequest, TelegramAdmin, UploadJob, YouTubeChannel
+from security import new_token
 from youtube import (
     discard_preflight_video,
     publish_checked_video,
+    publishing_preflight_capability,
     upload_to_youtube,
     wait_for_video_preflight,
 )
@@ -39,6 +41,30 @@ def _telegram_targets_for_job(job_id: int) -> list[int]:
                 targets.append(int(admin.user_id))
 
     return list(dict.fromkeys(targets))
+
+
+def _create_reconnect_url(job_id: int) -> str:
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        if not job:
+            return f"{Config.PUBLIC_BASE_URL}/channels"
+        channel = db.get(YouTubeChannel, job.channel_id)
+        admin_id = job.telegram_user_id
+        if not admin_id:
+            primary = (get_secret("telegram_primary_admin_id") or "").strip()
+            admin_id = int(primary) if primary.isdigit() else None
+        if not admin_id:
+            return f"{Config.PUBLIC_BASE_URL}/channels"
+
+        token = new_token(32)
+        db.add(OAuthRequest(
+            token=token,
+            telegram_user_id=int(admin_id),
+            label=(channel.label if channel else "YouTube Channel")[:120],
+            expires_at=datetime.utcnow() + timedelta(minutes=Config.OAUTH_LINK_MINUTES),
+        ))
+        db.commit()
+        return f"{Config.PUBLIC_BASE_URL}/telegram/connect/{token}"
 
 
 def _send_telegram_job_event(
@@ -98,6 +124,21 @@ def _send_telegram_job_event(
             f"ویدیوی Private حذف شد و از صف فعال انتشار خارج شد."
         )
         reply_markup = None
+    elif event == "reauth_required":
+        reconnect_url = _create_reconnect_url(job_id)
+        text = (
+            f"🔐 دسترسی OAuth کانال برای انتشار امن کامل نیست.\n\n"
+            f"🎬 {title}\n"
+            f"📺 {channel_name}\n"
+            f"🧾 Job #{job_id}\n\n"
+            f"برای Flow «Private → بررسی → Public/Delete» یک‌بار کانال را با دسترسی مدیریت دوباره متصل کن. "
+            f"تا قبل از آن این Job آپلود جدیدی انجام نمی‌دهد."
+        )
+        reply_markup = {
+            "inline_keyboard": [[
+                {"text": "🔐 اتصال مجدد YouTube", "url": reconnect_url}
+            ]]
+        }
     elif event == "completed":
         text = (
             f"✅ ویدیو با موفقیت منتشر شد.\n\n"
@@ -213,6 +254,27 @@ def process_job(job_id: int) -> dict:
             hashtags = job.hashtags
             description = job.description
             privacy = job.privacy
+
+        capability = publishing_preflight_capability(channel_id)
+        if not capability.get("ok"):
+            message = (
+                "YouTube OAuth is missing management permission required for "
+                "private preflight publishing. Reconnect the channel once."
+            )
+            with SessionLocal() as db:
+                job = db.get(UploadJob, job_id)
+                if job:
+                    job.status = "reauth_required"
+                    job.error = message
+                    job.started_at = None
+                    db.commit()
+            _send_telegram_job_event(job_id, event="reauth_required", error=message)
+            return {
+                "success": False,
+                "needs_reauth": True,
+                "job_id": job_id,
+                "error": message,
+            }
 
         file_path = download_video(source_url)
         if not file_path:
