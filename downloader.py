@@ -7,8 +7,9 @@ import subprocess
 import uuid
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
+import httpx
 import yt_dlp
 
 from config import Config, DOWNLOAD_DIR
@@ -100,14 +101,138 @@ def _external_ydl_opts(job_dir: Path | None = None, quality: str = "max") -> dic
     return opts
 
 
+def _direct_filename(url: str, content_type: str = "") -> str:
+    raw = Path(unquote(urlparse(url).path)).name
+    suffix = Path(raw).suffix.lower()
+    if suffix not in _VIDEO_SUFFIXES:
+        suffix = {
+            "video/mp4": ".mp4",
+            "video/webm": ".webm",
+            "video/quicktime": ".mov",
+            "video/x-matroska": ".mkv",
+        }.get((content_type or "").split(";", 1)[0].lower(), ".mp4")
+    stem = Path(raw).stem if raw else "direct-video"
+    safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in stem)[:100]
+    return f"{safe_stem or 'direct-video'}{suffix}"
+
+
+def _direct_http_probe(url: str) -> dict[str, Any]:
+    current = url
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36",
+        "Range": "bytes=0-0",
+        "Accept": "*/*",
+    }
+    with httpx.Client(follow_redirects=False, timeout=20.0, headers=headers) as client:
+        for _ in range(6):
+            if not is_supported_external_url(current):
+                raise ValueError("Redirect points to a private or unsupported address")
+            with client.stream("GET", current) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise RuntimeError("Redirect response has no Location header")
+                    current = urljoin(current, location)
+                    continue
+                response.raise_for_status()
+                content_type = (response.headers.get("content-type") or "").lower()
+                suffix = Path(urlparse(current).path).suffix.lower()
+                if not content_type.startswith("video/") and suffix not in _VIDEO_SUFFIXES:
+                    raise RuntimeError(f"Direct URL is not recognized as video media ({content_type or 'unknown type'})")
+                size_raw = response.headers.get("content-length") or "0"
+                try:
+                    size = int(size_raw)
+                except ValueError:
+                    size = 0
+                name = _direct_filename(current, content_type)
+                return {
+                    "id": "",
+                    "title": Path(name).stem.replace("_", " ").strip()[:255],
+                    "description": "",
+                    "duration": 0,
+                    "width": 0,
+                    "height": 0,
+                    "fps": 0.0,
+                    "thumbnail": "",
+                    "extractor": "Direct HTTP",
+                    "webpage_url": current,
+                    "uploader": urlparse(current).hostname or "",
+                    "file_size": size,
+                }
+    raise RuntimeError("Too many redirects")
+
+
+def _download_direct_http_video(url: str, job_dir: Path) -> tuple[Path, dict[str, Any]]:
+    current = url
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36",
+        "Accept": "*/*",
+    }
+    with httpx.Client(follow_redirects=False, timeout=httpx.Timeout(30.0, read=60.0), headers=headers) as client:
+        for _ in range(6):
+            if not is_supported_external_url(current):
+                raise ValueError("Redirect points to a private or unsupported address")
+            with client.stream("GET", current) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise RuntimeError("Redirect response has no Location header")
+                    current = urljoin(current, location)
+                    continue
+                response.raise_for_status()
+                content_type = (response.headers.get("content-type") or "").lower()
+                suffix = Path(urlparse(current).path).suffix.lower()
+                if not content_type.startswith("video/") and suffix not in _VIDEO_SUFFIXES:
+                    raise RuntimeError(f"Direct URL is not recognized as video media ({content_type or 'unknown type'})")
+
+                expected = 0
+                try:
+                    expected = int(response.headers.get("content-length") or 0)
+                except ValueError:
+                    expected = 0
+                free = shutil.disk_usage(DOWNLOAD_DIR).free
+                reserve = 1024 * 1024 * 1024
+                if expected and expected > max(0, free - reserve):
+                    raise RuntimeError("Not enough free disk space for this video")
+
+                target = job_dir / _direct_filename(current, content_type)
+                written = 0
+                with target.open("wb") as fh:
+                    for chunk in response.iter_bytes(1024 * 1024):
+                        if not chunk:
+                            continue
+                        fh.write(chunk)
+                        written += len(chunk)
+                        if written > max(0, free - reserve):
+                            raise RuntimeError("Download stopped to preserve server disk space")
+
+                if not _has_video_stream(target):
+                    raise RuntimeError("Downloaded direct file has no valid video stream")
+                return target, {
+                    "id": "",
+                    "title": target.stem.replace("_", " ")[:255],
+                    "duration": 0,
+                    "width": 0,
+                    "height": 0,
+                    "fps": 0.0,
+                    "extractor": "Direct HTTP",
+                    "webpage_url": current,
+                    "file_size": target.stat().st_size,
+                }
+    raise RuntimeError("Too many redirects")
+
+
 def probe_external_video(url: str) -> dict[str, Any]:
     if not is_supported_external_url(url):
         raise ValueError("Only public http/https media URLs are allowed")
 
     opts = _external_ydl_opts(None, "max")
     opts.update({"skip_download": True})
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except yt_dlp.utils.DownloadError:
+        return _direct_http_probe(url)
     if not info:
         raise RuntimeError("Media metadata could not be read")
 
@@ -156,23 +281,26 @@ def download_external_video(url: str, *, quality: str = "max") -> tuple[str, dic
 
     try:
         logger.info("Downloading external long-form media: %s", url)
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            if not info:
-                raise RuntimeError("Media download returned no metadata")
-
-        video_path = _select_downloaded_video(job_dir)
-        metadata = {
-            "id": str(info.get("id") or ""),
-            "title": str(info.get("title") or "")[:255],
-            "duration": int(info.get("duration") or 0),
-            "width": int(info.get("width") or 0),
-            "height": int(info.get("height") or 0),
-            "fps": float(info.get("fps") or 0),
-            "extractor": str(info.get("extractor_key") or info.get("extractor") or ""),
-            "webpage_url": str(info.get("webpage_url") or url),
-            "file_size": video_path.stat().st_size,
-        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if not info:
+                    raise RuntimeError("Media download returned no metadata")
+            video_path = _select_downloaded_video(job_dir)
+            metadata = {
+                "id": str(info.get("id") or ""),
+                "title": str(info.get("title") or "")[:255],
+                "duration": int(info.get("duration") or 0),
+                "width": int(info.get("width") or 0),
+                "height": int(info.get("height") or 0),
+                "fps": float(info.get("fps") or 0),
+                "extractor": str(info.get("extractor_key") or info.get("extractor") or ""),
+                "webpage_url": str(info.get("webpage_url") or url),
+                "file_size": video_path.stat().st_size,
+            }
+        except yt_dlp.utils.DownloadError:
+            logger.info("yt-dlp extractor failed; trying safe direct HTTP fallback")
+            video_path, metadata = _download_direct_http_video(url, job_dir)
         logger.info(
             "Long-form media ready: %s (%s bytes)",
             video_path.name,
