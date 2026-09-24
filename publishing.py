@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from analytics import get_or_sync_channel_analytics
 from config import Config
 from db import SessionLocal, init_db
-from jobs import enqueue_job, process_job
+from jobs import enqueue_job, finalize_prepared_long_job, process_job
 from models import ChannelPublishingConfig, UploadJob, UploadSchedule, YouTubeChannel
 from missions import dispatch_due_mission_reports
 from youtube import list_channel_videos
@@ -580,7 +580,11 @@ def _mark_due_for_release(limit: int = 8) -> list[int]:
 
 
 def _process_scheduled_job(job_id: int) -> None:
-    result = process_job(job_id)
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        ready_prepared = bool(job and job.status == "ready_scheduled" and job.video_id)
+
+    result = finalize_prepared_long_job(job_id) if ready_prepared else process_job(job_id)
     with SessionLocal() as db:
         row = db.query(UploadSchedule).filter_by(job_id=job_id).one_or_none()
         if row:
