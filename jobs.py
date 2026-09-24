@@ -12,7 +12,12 @@ from db import SessionLocal
 from downloader import cleanup_download, download_video
 from integrations import get_secret, resolve_telegram_token
 from models import TelegramAdmin, UploadJob, YouTubeChannel
-from youtube import upload_to_youtube
+from youtube import (
+    discard_preflight_video,
+    publish_checked_video,
+    upload_to_youtube,
+    wait_for_video_preflight,
+)
 
 logger = logging.getLogger("jobs")
 _executor = ThreadPoolExecutor(max_workers=Config.MAX_WORKERS, thread_name_prefix="uploads")
@@ -63,6 +68,24 @@ def _send_telegram_job_event(
             f"📺 {channel_name}\n"
             f"🔐 {privacy}\n"
             f"🧾 Job #{job_id}"
+        )
+        reply_markup = None
+    elif event == "checking":
+        text = (
+            f"🛡 ویدیو به‌صورت Private آپلود شد و در حال بررسی قبل از انتشار است.\n\n"
+            f"🎬 {title}\n"
+            f"📺 {channel_name}\n"
+            f"🧾 Job #{job_id}"
+        )
+        reply_markup = None
+    elif event == "copyright_blocked":
+        text = (
+            f"⛔ انتشار متوقف شد؛ YouTube در بررسی قبل از انتشار مشکل تشخیص داد.\n\n"
+            f"🎬 {title}\n"
+            f"📺 {channel_name}\n"
+            f"🧾 Job #{job_id}\n"
+            f"گزارش: {(error or 'YouTube preflight rejected the video')[:700]}\n\n"
+            f"ویدیوی Private از YouTube حذف شد و این Job از مسیر انتشار خارج شد."
         )
         reply_markup = None
     elif event == "completed":
@@ -197,7 +220,55 @@ def process_job(job_id: int) -> dict:
             hashtags=hashtags,
             description=description,
             privacy=privacy,
+            force_private=True,
         )
+        video_id = result["video_id"]
+
+        with SessionLocal() as db:
+            job = db.get(UploadJob, job_id)
+            job.status = "checking"
+            job.video_id = video_id
+            job.video_url = result["video_url"]
+            db.commit()
+
+        _send_telegram_job_event(job_id, event="checking")
+        check = wait_for_video_preflight(channel_id, video_id)
+
+        if not check.get("ok"):
+            reason = str(check.get("reason") or "YouTube preflight failed")
+            try:
+                discard_preflight_video(channel_id, video_id)
+            except Exception:
+                logger.exception("Could not delete blocked private video %s", video_id)
+
+            with SessionLocal() as db:
+                job = db.get(UploadJob, job_id)
+                job.status = "copyright_blocked" if check.get("copyright_signal") else "preflight_blocked"
+                job.error = reason[:4000]
+                job.video_id = None
+                job.video_url = None
+                job.finished_at = datetime.utcnow()
+                db.commit()
+
+            _send_telegram_job_event(
+                job_id,
+                event="copyright_blocked",
+                error=reason,
+            )
+            return {
+                "success": False,
+                "blocked": True,
+                "job_id": job_id,
+                "error": reason,
+                "copyright_signal": bool(check.get("copyright_signal")),
+            }
+
+        published = publish_checked_video(
+            channel_id,
+            video_id,
+            privacy=privacy,
+        )
+        result.update(published)
 
         with SessionLocal() as db:
             job = db.get(UploadJob, job_id)
