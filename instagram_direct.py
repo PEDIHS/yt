@@ -385,7 +385,11 @@ def notify_pending_share(share_id: int) -> None:
 
     with SessionLocal() as db:
         share = db.get(InstagramDirectShare, share_id)
-        if not share or share.status not in {"pending_channel", "notified"}:
+        if not share:
+            return
+        if share.status == "notified" and share.telegram_message_id:
+            return
+        if share.status not in {"pending_channel", "notified"}:
             return
         sender = f"@{share.sender_username}" if share.sender_username else (share.sender_id or "Unknown")
         text = (
