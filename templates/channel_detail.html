@@ -49,6 +49,34 @@
   </div>
 </section>
 
+{% set workspace_channel = channel %}
+{% include "_channel_workspace_nav.html" %}
+
+<section class="channel-ops-grid">
+  <article class="channel-ops-card glass-card"><span>Published Jobs</span><strong>{{ compact_number(channel_jobs.completed) }}</strong><small>انتشارهای ثبت‌شده این کانال</small></article>
+  <article class="channel-ops-card glass-card"><span>Queue</span><strong>{{ compact_number(channel_jobs.scheduled) }}</strong><small>آیتم در انتظار انتشار</small></article>
+  <article class="channel-ops-card glass-card"><span>Active Pipeline</span><strong>{{ compact_number(channel_jobs.active) }}</strong><small>در حال آماده‌سازی / آپلود / بررسی</small></article>
+  <article class="channel-ops-card glass-card"><span>Blocked</span><strong>{{ compact_number(channel_jobs.blocked) }}</strong><small>Copyright / Preflight</small></article>
+</section>
+
+{% if upcoming_queue %}
+<section class="channel-next-queue glass-card">
+  <div class="card-heading">
+    <div><span class="section-kicker">NEXT PUBLISHING SLOTS</span><h2>صف بعدی همین کانال</h2><p>Copyright Recovery در صورت Block شدن، آیتم بعدی را به Slot قبلی منتقل می‌کند.</p></div>
+    <a class="btn btn-soft" href="{{ url_for('publishing_page', channel_id=channel.id) }}"><i data-lucide="calendar-range"></i> مدیریت صف</a>
+  </div>
+  <div class="channel-queue-list">
+    {% for item in upcoming_queue %}
+    <div>
+      <span class="queue-position">#{{ loop.index }}</span>
+      <span class="grow"><strong>{{ item.title }}</strong><small>{{ item.source }} · {{ item.schedule_mode }}</small></span>
+      <time>{{ item.scheduled_local.strftime('%Y-%m-%d %H:%M') }}</time>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 {% if analytics_error %}
 <section class="notice-card notice-danger">
   <div class="notice-icon"><i data-lucide="triangle-alert"></i></div>
