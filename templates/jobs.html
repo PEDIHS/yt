@@ -3,7 +3,9 @@
 {% block heading %}تاریخچه ارسال{% endblock %}
 {% block subheading %}وضعیت Shorts و Long-form از دانلود و Preflight تا انتشار نهایی{% endblock %}
 {% block content %}
-<div class="filters"><a class="pill {% if not selected_status %}active-filter{% endif %}" href="{{ url_for('jobs') }}">همه</a>{% for s in ['queued','scheduled','preparing','ready_scheduled','downloading','uploading','checking','reauth_required','copyright_blocked','preflight_blocked','completed','failed','cancelled'] %}<a class="pill status-{{ s }} {% if selected_status==s %}active-filter{% endif %}" href="{{ url_for('jobs', status=s) }}">{{ s }}</a>{% endfor %}</div>
+{% set workspace_channel = selected_channel %}
+{% include "_channel_workspace_nav.html" %}
+<div class="filters"><a class="pill {% if not selected_status %}active-filter{% endif %}" href="{{ url_for('jobs', channel_id=selected_channel_id) if selected_channel_id else url_for('jobs') }}">همه</a>{% for s in ['queued','scheduled','preparing','ready_scheduled','downloading','uploading','checking','reauth_required','copyright_blocked','preflight_blocked','completed','failed','cancelled'] %}<a class="pill status-{{ s }} {% if selected_status==s %}active-filter{% endif %}" href="{{ url_for('jobs', status=s, channel_id=selected_channel_id) if selected_channel_id else url_for('jobs', status=s) }}">{{ s }}</a>{% endfor %}</div>
 <section class="card table-card"><div class="table-wrap"><table><thead><tr><th>Job</th><th>کانال</th><th>عنوان</th><th>منبع</th><th>وضعیت</th><th>زمان</th><th>خروجی</th></tr></thead><tbody>
 {% for job in jobs %}<tr><td>#{{ job.id }}</td><td>{{ channel_map.get(job.channel_id).label if channel_map.get(job.channel_id) else job.channel_id }}</td><td><strong>{{ job.title }}</strong>{% if job.error %}<small class="error-text">{{ job.error }}</small>{% endif %}</td><td>
   {% if job.source == 'panel-long' %}
