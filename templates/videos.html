@@ -27,6 +27,8 @@
   {% endif %}
 </section>
 
+{% include "_channel_workspace_nav.html" %}
+
 {% if selected_channel %}
 <section class="manager-status-strip">
   <div class="manager-channel-card glass-card">
@@ -42,7 +44,7 @@
     </span>
   </div>
   <div class="manager-actions-card glass-card">
-    <a class="btn btn-primary" href="{{ url_for('upload') }}"><i data-lucide="upload-cloud"></i> انتشار جدید</a>
+    <a class="btn btn-primary" href="{{ url_for('upload', channel_id=selected_channel.id) }}"><i data-lucide="upload-cloud"></i> انتشار جدید</a>
     <a class="btn btn-soft" href="{{ url_for('channel_detail', channel_id=selected_channel.id) }}"><i data-lucide="chart-no-axes-combined"></i> Analytics</a>
     {% if not authorization.manage or not authorization.force_ssl %}
     <form method="post" action="{{ url_for('channels_connect') }}">
