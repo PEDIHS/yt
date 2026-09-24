@@ -3,12 +3,13 @@
 {% block heading %}ارسال محتوا{% endblock %}
 {% block subheading %}انتشار Reel/Post در کانال انتخابی با تنظیمات مستقل{% endblock %}
 {% block content %}
+{% include "_channel_workspace_nav.html" %}
 <section class="card form-card">
   {% if channels %}
   <form method="post" class="form-grid two-cols">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label class="span-2">لینک Instagram<input name="source_url" placeholder="https://www.instagram.com/reel/..." required></label>
-    <label>کانال مقصد<select name="channel_id" required>{% for ch in channels %}<option value="{{ ch.id }}">{{ ch.label }} — {{ ch.title }}</option>{% endfor %}</select></label>
+    <label>کانال مقصد<select name="channel_id" required>{% for ch in channels %}<option value="{{ ch.id }}" {% if selected_channel_id == ch.id %}selected{% endif %}>{{ ch.label }} — {{ ch.title }}</option>{% endfor %}</select></label>
     <label>Privacy<select name="privacy"><option value="">پیش‌فرض کانال</option><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select></label>
     <label class="span-2">عنوان<input name="title" maxlength="255" required></label>
     <label class="span-2">توضیحات<textarea name="description" rows="5" placeholder="اختیاری"></textarea></label>
@@ -25,7 +26,7 @@
       <input type="datetime-local" name="scheduled_at">
       <span class="hint">براساس Timezone تنظیم‌شده برای کانال</span>
     </label>
-    <div class="span-2 actions"><button class="btn primary"><i data-lucide="send"></i> ثبت محتوا</button><a class="btn btn-soft" href="{{ url_for('publishing_page') }}"><i data-lucide="sparkles"></i> صف هوشمند</a></div>
+    <div class="span-2 actions"><button class="btn primary"><i data-lucide="send"></i> ثبت محتوا</button><a class="btn btn-soft" href="{{ url_for('publishing_page', channel_id=selected_channel_id) if selected_channel_id else url_for('publishing_page') }}"><i data-lucide="sparkles"></i> صف هوشمند</a></div>
   </form>
   {% else %}<div class="empty">ابتدا از بخش «کانال‌ها» یک کانال YouTube متصل کنید.</div>{% endif %}
 </section>
