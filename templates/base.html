@@ -57,7 +57,10 @@
           <i data-lucide="sparkles"></i><span>انتشار هوشمند</span>
         </a>
         <a href="{{ url_for('upload') }}" class="{% if request.endpoint == 'upload' %}active{% endif %}">
-          <i data-lucide="send"></i><span>ارسال محتوا</span>
+          <i data-lucide="send"></i><span>ارسال Shorts</span>
+        </a>
+        <a href="{{ url_for('long_video_upload') }}" class="{% if request.endpoint in ['long_video_upload','api_long_video_probe'] %}active{% endif %}">
+          <i data-lucide="film"></i><span>Long Video Studio</span>
         </a>
         <a href="{{ url_for('jobs') }}" class="{% if request.endpoint == 'jobs' %}active{% endif %}">
           <i data-lucide="list-checks"></i><span>Jobها و تاریخچه</span>
