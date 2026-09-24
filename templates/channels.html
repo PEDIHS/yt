@@ -156,8 +156,8 @@
         <span><i data-lucide="refresh-cw"></i>{{ channel.last_synced_at.strftime('%Y-%m-%d %H:%M') if channel.last_synced_at else 'Not synced' }}</span>
       </div>
       <div class="yt-card-actions">
-        <a class="btn btn-soft" href="{{ url_for('missions_page') }}"><i data-lucide="target"></i> Mission</a>
-        <a class="btn btn-soft" href="{{ url_for('channel_detail', channel_id=channel.id, days=28) }}"><i data-lucide="chart-no-axes-combined"></i> Analytics Studio</a>
+        <a class="btn btn-primary" href="{{ url_for('channel_detail', channel_id=channel.id, days=28) }}"><i data-lucide="layout-dashboard"></i> مدیریت کانال</a>
+        <a class="btn btn-soft" href="{{ url_for('missions_page', channel_id=channel.id) }}"><i data-lucide="target"></i> Mission</a>
       </div>
     </div>
   </article>
