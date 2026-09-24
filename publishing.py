@@ -21,6 +21,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 _scheduler_executor = ThreadPoolExecutor(max_workers=max(1, Config.MAX_WORKERS), thread_name_prefix="smart-publisher")
 _peak_analysis_inflight: set[int] = set()
+_long_preparation_inflight: set[int] = set()
 
 DEFAULT_PEAK_HOURS = [12, 15, 18, 21, 23]
 
@@ -575,20 +576,22 @@ def _prepare_pending_long_jobs(limit: int = 2) -> list[int]:
         claimed: list[int] = []
         now = _utcnow()
         for job, schedule, _option in rows:
-            # A stale "preparing" state with no started_at can be reclaimed
-            # after a service restart; active preparations have started_at set.
-            if job.status == "preparing" and job.started_at is not None:
+            if job.id in _long_preparation_inflight:
                 continue
             if schedule.scheduled_for <= now and job.status == "scheduled":
                 # Due scan will handle it immediately.
                 continue
+            # "preparing" is intentionally reclaimable after a scheduler
+            # restart because the in-memory inflight set will be empty.
             job.status = "preparing"
             job.error = None
             claimed.append(job.id)
         db.commit()
 
     for job_id in claimed:
-        prepare_long_job_for_schedule(job_id)
+        _long_preparation_inflight.add(job_id)
+        future = prepare_long_job_for_schedule(job_id)
+        future.add_done_callback(lambda _future, jid=job_id: _long_preparation_inflight.discard(jid))
     return claimed
 
 
