@@ -5,6 +5,7 @@
 {% block subheading %}Metadata، Thumbnail، Playlist، Comments، Captions و حذف دائمی{% endblock %}
 
 {% block content %}
+{% include "_channel_workspace_nav.html" %}
 <section class="video-studio-hero glass-card">
   <div class="video-studio-preview">
     {% if video.thumbnail_url %}<img src="{{ video.thumbnail_url }}" alt="{{ video.title }}">{% endif %}
