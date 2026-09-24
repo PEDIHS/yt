@@ -235,6 +235,122 @@ def enqueue_job(job_id: int):
     return _executor.submit(process_job, job_id)
 
 
+def resume_reauth_job(job_id: int) -> dict:
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        if not job:
+            return {"success": False, "job_id": job_id, "error": "Upload job not found"}
+        channel_id = job.channel_id
+        video_id = job.video_id
+        privacy = job.privacy
+
+    capability = publishing_preflight_capability(channel_id)
+    if not capability.get("ok"):
+        return {
+            "success": False,
+            "needs_reauth": True,
+            "job_id": job_id,
+            "error": "YouTube management permission is still missing.",
+        }
+
+    if not video_id:
+        with SessionLocal() as db:
+            job = db.get(UploadJob, job_id)
+            if job:
+                job.status = "queued"
+                job.error = None
+                db.commit()
+        return process_job(job_id)
+
+    try:
+        with SessionLocal() as db:
+            job = db.get(UploadJob, job_id)
+            if job:
+                job.status = "checking"
+                job.error = None
+                db.commit()
+
+        _send_telegram_job_event(job_id, event="checking")
+        check = wait_for_video_preflight(channel_id, video_id)
+        if not check.get("ok"):
+            reason = str(check.get("reason") or "YouTube preflight failed")
+            try:
+                discard_preflight_video(channel_id, video_id)
+            except Exception:
+                logger.exception("Could not delete blocked private video %s", video_id)
+
+            blocked_status = "copyright_blocked" if check.get("copyright_signal") else "preflight_blocked"
+            with SessionLocal() as db:
+                job = db.get(UploadJob, job_id)
+                if job:
+                    job.status = blocked_status
+                    job.error = reason[:4000]
+                    job.video_id = None
+                    job.video_url = None
+                    job.finished_at = datetime.utcnow()
+                share = db.query(InstagramDirectShare).filter_by(upload_job_id=job_id).one_or_none()
+                if share:
+                    share.status = blocked_status
+                db.commit()
+
+            _send_telegram_job_event(
+                job_id,
+                event="copyright_blocked" if check.get("copyright_signal") else "preflight_blocked",
+                error=reason,
+            )
+            return {
+                "success": False,
+                "blocked": True,
+                "job_id": job_id,
+                "error": reason,
+                "copyright_signal": bool(check.get("copyright_signal")),
+            }
+
+        published = publish_checked_video(channel_id, video_id, privacy=privacy)
+        with SessionLocal() as db:
+            job = db.get(UploadJob, job_id)
+            if job:
+                job.status = "completed"
+                job.video_id = published["video_id"]
+                job.video_url = published["video_url"]
+                job.error = None
+                job.finished_at = datetime.utcnow()
+            share = db.query(InstagramDirectShare).filter_by(upload_job_id=job_id).one_or_none()
+            if share:
+                share.status = "completed"
+            db.commit()
+
+        _send_telegram_job_event(
+            job_id,
+            event="completed",
+            video_url=published.get("video_url") or "",
+        )
+        return {"success": True, "job_id": job_id, **published}
+    except Exception as exc:
+        logger.exception("Could not resume reauthorized Job %s", job_id)
+        with SessionLocal() as db:
+            job = db.get(UploadJob, job_id)
+            if job:
+                job.status = "reauth_required"
+                job.error = str(exc)[:4000]
+                db.commit()
+        return {"success": False, "job_id": job_id, "error": str(exc)}
+
+
+def resume_reauth_jobs_for_channel(channel_id: int) -> list[int]:
+    with SessionLocal() as db:
+        job_ids = [
+            row.id
+            for row in db.query(UploadJob).filter(
+                UploadJob.channel_id == channel_id,
+                UploadJob.status == "reauth_required",
+            ).order_by(UploadJob.id.asc()).all()
+        ]
+    for job_id in job_ids:
+        _executor.submit(resume_reauth_job, job_id)
+    return job_ids
+
+
 def process_job(job_id: int) -> dict:
     file_path: Optional[str] = None
     staged_video_id: Optional[str] = None
