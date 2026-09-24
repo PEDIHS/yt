@@ -21,6 +21,8 @@
   </div>
 </section>
 
+{% include "_channel_workspace_nav.html" %}
+
 <section class="smart-channel-grid">
   {% for channel in channels %}
   {% set cfg = configs.get(channel.id, {}) %}
