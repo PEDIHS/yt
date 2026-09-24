@@ -376,6 +376,7 @@ def sync_channel_analytics(channel_id: int, days: int = 28) -> dict[str, Any]:
                     {
                         "type": str(row.get("creatorContentType") or "Unknown"),
                         "views": _safe_int(row.get("views")),
+                        "engaged_views": _safe_int(row.get("engagedViews")),
                         "watch_minutes": _safe_int(row.get("estimatedMinutesWatched")),
                     }
                     for row in content_type_rows
