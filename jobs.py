@@ -1026,6 +1026,8 @@ def process_job(job_id: int) -> dict:
                 event="copyright_blocked" if check.get("copyright_signal") else "preflight_blocked",
                 error=reason,
             )
+            if check.get("copyright_signal"):
+                recover_queue_after_block(job_id)
             return {
                 "success": False,
                 "blocked": True,
