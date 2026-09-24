@@ -123,6 +123,12 @@ def build_channel_mission(
     data90, error90 = get_or_sync_channel_analytics(channel_id, 90, max_age_minutes=max_age)
     data365, error365 = get_or_sync_channel_analytics(channel_id, 365, max_age_minutes=max_age)
 
+    # Older cache snapshots predate engagedViews support. Refresh once so the
+    # Shorts YPP mission never falls back to the newer raw public-view metric.
+    rows90 = _content_rows(data90)
+    if data90 and rows90 and not any("engaged_views" in row for row in rows90):
+        data90, error90 = get_or_sync_channel_analytics(channel_id, 90, max_age_minutes=0)
+
     with SessionLocal() as db:
         channel = db.get(YouTubeChannel, channel_id)
         if not channel:
