@@ -18,7 +18,7 @@
   <div class="ambient ambient-c"></div>
 
   <div class="app-shell">
-    <aside class="sidebar glass-panel" id="sidebar">
+    <aside class="sidebar glass-panel" id="sidebar" aria-label="منوی اصلی" aria-hidden="false">
       <div class="sidebar-header">
         <a class="brand" href="{{ url_for('dashboard') }}">
           <span class="brand-mark"><i data-lucide="youtube"></i></span>
@@ -70,7 +70,7 @@
     <main class="main-area">
       <header class="topbar">
         <div class="topbar-title">
-          <button class="icon-btn mobile-menu" type="button" data-sidebar-open aria-label="باز کردن منو">
+          <button class="icon-btn mobile-menu" type="button" data-sidebar-open aria-label="باز کردن منو" aria-controls="sidebar" aria-expanded="false">
             <i data-lucide="menu"></i>
           </button>
           <div>
@@ -104,7 +104,7 @@
     </main>
   </div>
 
-  <div class="sidebar-backdrop" data-sidebar-backdrop></div>
+  <button class="sidebar-backdrop" type="button" data-sidebar-backdrop aria-label="بستن منو"></button>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
   <script src="{{ url_for('static', filename='panel.js') }}"></script>
