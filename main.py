@@ -1502,7 +1502,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not share:
                 await query.edit_message_text("⚠️ این درخواست پیدا نشد.", reply_markup=None)
                 return
-            if share.status in {"confirmed", "scheduled", "queued"}:
+            if share.status in {"confirmed", "scheduled", "queued", "completed", "copyright_blocked", "preflight_blocked"}:
                 message = f"قبلاً ثبت شده؛ Job #{share.upload_job_id}" if share.upload_job_id else "قبلاً ثبت شده."
                 await query.edit_message_text(f"✅ {message}", reply_markup=None)
                 return
@@ -1517,7 +1517,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InstagramDirectShare.id != share_id,
                 InstagramDirectShare.media_url == share.media_url,
                 InstagramDirectShare.upload_job_id.isnot(None),
-                InstagramDirectShare.status.in_(["confirmed", "scheduled", "queued"]),
+                InstagramDirectShare.status.in_(["confirmed", "scheduled", "queued", "completed", "copyright_blocked", "preflight_blocked"]),
             ).order_by(InstagramDirectShare.id.desc()).first()
             if duplicate:
                 share.status = "superseded"
@@ -1577,7 +1577,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not share:
                 await query.edit_message_text("⚠️ درخواست پیدا نشد.", reply_markup=None)
                 return
-            if share.status in {"confirmed", "scheduled", "queued"}:
+            if share.status in {"confirmed", "scheduled", "queued", "completed", "copyright_blocked", "preflight_blocked"}:
                 message = f"✅ این محتوا قبلاً ثبت شده؛ Job #{share.upload_job_id}" if share.upload_job_id else "✅ این محتوا قبلاً ثبت شده."
                 await query.edit_message_text(message, reply_markup=None)
                 return
@@ -1614,7 +1614,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not share:
                 await query.answer("درخواست پیدا نشد.", show_alert=True)
                 return
-            if share.status in {"confirmed", "scheduled", "queued"}:
+            if share.status in {"confirmed", "scheduled", "queued", "completed", "copyright_blocked", "preflight_blocked"}:
                 message = f"✅ قبلاً ثبت شده؛ Job #{share.upload_job_id}" if share.upload_job_id else "✅ این محتوا قبلاً ثبت شده."
                 await query.edit_message_text(message, reply_markup=None)
                 return
@@ -1645,7 +1645,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InstagramDirectShare.id != share_id,
                 InstagramDirectShare.media_url == current.media_url,
                 InstagramDirectShare.upload_job_id.isnot(None),
-                InstagramDirectShare.status.in_(["confirmed", "scheduled", "queued"]),
+                InstagramDirectShare.status.in_(["confirmed", "scheduled", "queued", "completed", "copyright_blocked", "preflight_blocked"]),
             ).order_by(InstagramDirectShare.id.desc()).first()
             if duplicate:
                 current.status = "superseded"
