@@ -15,6 +15,7 @@ from db import SessionLocal
 from downloader import cleanup_download, download_external_video, download_video
 from integrations import get_secret, resolve_telegram_token
 from models import (
+    ChannelPublishingConfig,
     InstagramDirectShare,
     OAuthRequest,
     TelegramAdmin,
@@ -124,6 +125,15 @@ def _send_telegram_job_event(
             f"🧾 Job #{job_id}\n"
             f"گزارش YouTube: {(error or 'copyright/claim')[:700]}\n\n"
             f"ویدیوی Private از YouTube حذف شد و از صف فعال انتشار خارج شد."
+        )
+        reply_markup = None
+    elif event == "queue_recovered":
+        text = (
+            f"♻️ صف انتشار خودکار ترمیم شد.\n\n"
+            f"🎬 {title}\n"
+            f"📺 {channel_name}\n"
+            f"🧾 Job #{job_id}\n"
+            f"{(error or 'ویدیوی بعدی جایگزین شد و زمان‌های صف بروزرسانی شدند.')[:700]}"
         )
         reply_markup = None
     elif event == "preflight_blocked":
@@ -330,6 +340,81 @@ def _cleanup_long_asset(job_id: int) -> None:
             logger.exception("Failed to clean long-video asset for Job %s", job_id)
 
 
+def recover_queue_after_block(job_id: int) -> dict:
+    """Compact a channel queue when a scheduled item is blocked.
+
+    The next waiting item inherits the blocked slot and every later item moves
+    one slot forward. This keeps the publishing cadence intact without
+    duplicating or re-uploading the blocked media.
+    """
+    with SessionLocal() as db:
+        blocked_job = db.get(UploadJob, job_id)
+        blocked_schedule = db.query(UploadSchedule).filter_by(job_id=job_id).one_or_none()
+        if not blocked_job or not blocked_schedule:
+            return {"recovered": False, "reason": "not_scheduled"}
+
+        blocked_time = blocked_schedule.scheduled_for
+        blocked_schedule.status = "blocked"
+        blocked_schedule.released_at = datetime.utcnow()
+
+        waiting = (
+            db.query(UploadSchedule, UploadJob)
+            .join(UploadJob, UploadJob.id == UploadSchedule.job_id)
+            .filter(
+                UploadSchedule.channel_id == blocked_job.channel_id,
+                UploadSchedule.status == "waiting",
+                UploadSchedule.scheduled_for > blocked_time,
+                UploadJob.status.in_(["scheduled", "preparing", "ready_scheduled", "reauth_required"]),
+            )
+            .order_by(UploadSchedule.scheduled_for.asc(), UploadSchedule.id.asc())
+            .all()
+        )
+
+        if not waiting:
+            db.commit()
+            return {
+                "recovered": False,
+                "reason": "no_next_item",
+                "blocked_slot": blocked_time,
+            }
+
+        previous_time = blocked_time
+        moved: list[dict] = []
+        for schedule, job in waiting:
+            old_time = schedule.scheduled_for
+            schedule.scheduled_for = previous_time
+            schedule.reason = (
+                (schedule.reason or "").strip()
+                + f" | Queue recovery after blocked Job #{job_id}: "
+                  f"{old_time.isoformat()} -> {previous_time.isoformat()}"
+            )[-4000:]
+            moved.append({
+                "job_id": job.id,
+                "old_time": old_time,
+                "new_time": previous_time,
+                "title": job.title,
+            })
+            previous_time = old_time
+
+        db.commit()
+
+    first = moved[0]
+    _send_telegram_job_event(
+        job_id,
+        event="queue_recovered",
+        error=(
+            f"Job #{first['job_id']} جایگزین Slot شد؛ "
+            f"{len(moved)} آیتم بعدی صف یک Slot جلو آمد."
+        ),
+    )
+    return {
+        "recovered": True,
+        "blocked_slot": blocked_time,
+        "replacement_job_id": first["job_id"],
+        "moved": moved,
+    }
+
+
 def _mark_preflight_blocked(job_id: int, channel_id: int, video_id: str, check: dict) -> dict:
     reason = str(check.get("reason") or "YouTube preflight failed")
     try:
@@ -360,6 +445,8 @@ def _mark_preflight_blocked(job_id: int, channel_id: int, video_id: str, check: 
         event="copyright_blocked" if check.get("copyright_signal") else "preflight_blocked",
         error=reason,
     )
+    if check.get("copyright_signal"):
+        recover_queue_after_block(job_id)
     return {
         "success": False,
         "blocked": True,
@@ -780,6 +867,8 @@ def resume_reauth_job(job_id: int) -> dict:
                 event="copyright_blocked" if check.get("copyright_signal") else "preflight_blocked",
                 error=reason,
             )
+            if check.get("copyright_signal"):
+                recover_queue_after_block(job_id)
             return {
                 "success": False,
                 "blocked": True,
