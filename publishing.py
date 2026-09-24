@@ -588,6 +588,8 @@ def _process_scheduled_job(job_id: int) -> None:
                 row.status = "released"
             elif result.get("blocked"):
                 row.status = "blocked"
+            elif result.get("needs_reauth"):
+                row.status = "reauth_required"
             else:
                 row.status = "failed"
             row.released_at = _utcnow()
