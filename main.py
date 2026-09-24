@@ -1500,17 +1500,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             share = db.get(InstagramDirectShare, share_id)
             channel = db.get(YouTubeChannel, channel_id)
             if not share:
-                await query.answer("این درخواست پیدا نشد.", show_alert=True)
+                await query.edit_message_text("⚠️ این درخواست پیدا نشد.", reply_markup=None)
                 return
             if share.status in {"confirmed", "scheduled", "queued"}:
                 message = f"قبلاً ثبت شده؛ Job #{share.upload_job_id}" if share.upload_job_id else "قبلاً ثبت شده."
-                await query.answer(message, show_alert=True)
+                await query.edit_message_text(f"✅ {message}", reply_markup=None)
                 return
             if share.status == "cancelled":
-                await query.answer("این درخواست قبلاً لغو شده.", show_alert=True)
+                await query.edit_message_text("❌ این درخواست قبلاً لغو شده.", reply_markup=None)
                 return
             if not channel or not channel.is_active:
-                await query.answer("این کانال فعال نیست.", show_alert=True)
+                await query.edit_message_text(
+                    "⚠️ این کانال فعال نیست. یک کانال دیگر انتخاب کن:",
+                    reply_markup=_instagram_channel_keyboard(share_id),
+                )
                 return
 
             share.selected_channel_id = channel_id
@@ -1553,13 +1556,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with SessionLocal() as db:
             share = db.get(InstagramDirectShare, share_id)
             if not share:
-                await query.answer("درخواست پیدا نشد.", show_alert=True)
+                await query.edit_message_text("⚠️ درخواست پیدا نشد.", reply_markup=None)
                 return
             if share.status in {"confirmed", "scheduled", "queued"}:
-                await query.answer("این محتوا قبلاً ثبت شده.", show_alert=True)
+                message = f"✅ این محتوا قبلاً ثبت شده؛ Job #{share.upload_job_id}" if share.upload_job_id else "✅ این محتوا قبلاً ثبت شده."
+                await query.edit_message_text(message, reply_markup=None)
                 return
             if share.status == "cancelled":
-                await query.answer("این درخواست لغو شده.", show_alert=True)
+                await query.edit_message_text("❌ این درخواست لغو شده.", reply_markup=None)
                 return
             share.status = "pending_channel"
             share.selected_channel_id = None
@@ -1589,7 +1593,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer("درخواست پیدا نشد.", show_alert=True)
                 return
             if share.status in {"confirmed", "scheduled", "queued"}:
-                await query.answer("این محتوا قبلاً ثبت شده و قابل لغو نیست.", show_alert=True)
+                message = f"✅ قبلاً ثبت شده؛ Job #{share.upload_job_id}" if share.upload_job_id else "✅ این محتوا قبلاً ثبت شده."
+                await query.edit_message_text(message, reply_markup=None)
                 return
             share.status = "cancelled"
             share.cancelled_at = datetime.utcnow()
@@ -1628,11 +1633,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if updated != 1:
                 if share and share.upload_job_id:
-                    await query.answer(f"قبلاً ثبت شده؛ Job #{share.upload_job_id}", show_alert=True)
+                    await query.edit_message_text(
+                        f"✅ قبلاً ثبت شده؛ Job #{share.upload_job_id}",
+                        reply_markup=None,
+                    )
                 elif share and share.status == "confirming":
-                    await query.answer("در حال ثبت است؛ دوباره نزن.", show_alert=True)
+                    await query.edit_message_text(
+                        "⏳ این محتوا همین حالا در حال ثبت است؛ نیاز به کلیک دوباره نیست.",
+                        reply_markup=None,
+                    )
                 else:
-                    await query.answer("این درخواست دیگر قابل تأیید نیست.", show_alert=True)
+                    await query.edit_message_text(
+                        "⚠️ این درخواست دیگر قابل تأیید نیست.",
+                        reply_markup=None,
+                    )
                 return
 
             if not share or not channel or not channel.is_active:
@@ -1640,7 +1654,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     share.status = "awaiting_confirmation"
                     share.confirmed_at = None
                     db.commit()
-                await query.answer("کانال یا درخواست معتبر نیست.", show_alert=True)
+                await query.edit_message_text(
+                    "⚠️ کانال یا درخواست معتبر نیست. دوباره کانال را انتخاب کن.",
+                    reply_markup=_instagram_channel_keyboard(share_id),
+                )
                 return
 
             source_url = share.media_url
