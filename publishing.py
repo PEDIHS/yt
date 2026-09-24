@@ -583,7 +583,12 @@ def _process_scheduled_job(job_id: int) -> None:
     with SessionLocal() as db:
         row = db.query(UploadSchedule).filter_by(job_id=job_id).one_or_none()
         if row:
-            row.status = "released" if result.get("success") else "failed"
+            if result.get("success"):
+                row.status = "released"
+            elif result.get("blocked"):
+                row.status = "blocked"
+            else:
+                row.status = "failed"
             row.released_at = _utcnow()
             db.commit()
 
