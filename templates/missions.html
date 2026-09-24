@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}Mission Center | YT Studio{% endblock %}
+{% block eyebrow %}MONETIZATION MISSION CONTROL{% endblock %}
+{% block heading %}Mission درآمدزایی کانال‌ها{% endblock %}
+{% block subheading %}پایش هدف‌های YPP، مسیر Shorts و Watch Hours و گزارش خودکار نیمه‌شب{% endblock %}
+
+{% block content %}
+<section class="mission-hero glass-card">
+  <div>
+    <span class="section-kicker">YOUTUBE PARTNER PROGRAM</span>
+    <h2>هدف اصلی: Full Monetization</h2>
+    <p>Mission هر کانال با Analytics واقعی محاسبه می‌شود و نزدیک‌ترین مسیر درآمدزایی را بین Shorts و Long‑form مشخص می‌کند.</p>
+  </div>
+  <div class="mission-policy-grid">
+    <div>
+      <span>معیار فعلی تا 2027-01-31</span>
+      <strong>1K Subs</strong>
+      <small>10M Shorts / 90d یا 4K Watch Hours / 365d</small>
+    </div>
+    <div class="future">
+      <span>اعلام‌شده از 2027-02-01</span>
+      <strong>1K Subs</strong>
+      <small>20M Shorts / 90d یا 8K Watch Hours / 365d برای درخواست‌های جدید</small>
+    </div>
+  </div>
+</section>
+
+<div class="mission-info-strip">
+  <i data-lucide="info"></i>
+  <div>
+    <strong>عدد Mission یک برآورد API نزدیک به معیار YouTube است.</strong>
+    <span>مرجع نهایی Qualified metrics و تأیید عضویت، بخش Earn در YouTube Studio است.</span>
+  </div>
+</div>
+
+<div class="mission-grid">
+  {% for channel in channels %}
+  {% set mission = missions.get(channel.id) %}
+  <article class="mission-card glass-card">
+    {% if mission %}
+    <div class="mission-card-head">
+      <div class="channel-identity">
+        <div class="yt-avatar-shell">
+          {% if channel.thumbnail_url %}<img src="{{ channel.thumbnail_url }}" alt="{{ channel.title }}">{% else %}<div class="avatar avatar-lg">YT</div>{% endif %}
+          <span class="yt-live-dot {{ 'active' if channel.is_active else 'inactive' }}"></span>
+        </div>
+        <div>
+          <span class="section-kicker">MONETIZATION MISSION</span>
+          <h3>{{ channel.label }}</h3>
+          <small>{{ channel.title }}</small>
+        </div>
+      </div>
+      <span class="mission-path {{ mission.full.best_path }}">
+        <i data-lucide="{{ 'zap' if mission.full.best_path == 'shorts' else 'clock-3' }}"></i>
+        {{ 'Shorts Path' if mission.full.best_path == 'shorts' else 'Watch Hours Path' }}
+      </span>
+    </div>
+
+    <div class="mission-overview">
+      <div class="mission-ring" style="--mission-progress: {{ mission.full.progress }}%;">
+        <div>
+          <strong>{{ '%.1f'|format(mission.full.progress) }}%</strong>
+          <span>Full YPP</span>
+        </div>
+      </div>
+      <div class="mission-overview-copy">
+        <span class="section-kicker">MAIN OBJECTIVE</span>
+        <h3>{{ '%.1f'|format(mission.full.remaining) }}٪ تا معیار عددی درآمدزایی باقی مانده</h3>
+        <div class="mission-progress-track"><span style="width: {{ mission.full.progress }}%"></span></div>
+        <small>پیشرفت نهایی = Subscriber + بهترین مسیر از Shorts یا Long-form.</small>
+      </div>
+    </div>
+
+    <div class="mission-metrics">
+      <div>
+        <span><i data-lucide="users"></i>Subscribers</span>
+        <strong>{{ compact_number(mission.metrics.subscribers) }} <small>/ {{ compact_number(mission.full.targets.subscribers) }}</small></strong>
+        <div class="mini-progress"><span style="width: {{ mission.full.subscriber_progress }}%"></span></div>
+        <em>{{ '%.1f'|format(mission.full.subscriber_progress) }}%</em>
+      </div>
+      <div>
+        <span><i data-lucide="zap"></i>Shorts · 90d</span>
+        <strong>≈ {{ compact_number(mission.metrics.shorts_engaged_views_90) }} <small>/ {{ compact_number(mission.full.targets.shorts_90) }}</small></strong>
+        <div class="mini-progress"><span style="width: {{ mission.full.shorts_progress }}%"></span></div>
+        <em>{{ '%.1f'|format(mission.full.shorts_progress) }}%</em>
+      </div>
+      <div>
+        <span><i data-lucide="clock-3"></i>Watch Hours · 365d</span>
+        <strong>≈ {{ '{:,.1f}'.format(mission.metrics.longform_watch_hours_365) }} <small>/ {{ compact_number(mission.full.targets.watch_hours_365) }}</small></strong>
+        <div class="mini-progress"><span style="width: {{ mission.full.watch_progress }}%"></span></div>
+        <em>{{ '%.1f'|format(mission.full.watch_progress) }}%</em>
+      </div>
+    </div>
+
+    <div class="early-mission">
+      <div class="early-mission-head">
+        <div>
+          <span class="section-kicker">MILESTONE 01</span>
+          <strong>Early YPP</strong>
+        </div>
+        <b>{{ '%.1f'|format(mission.early.progress) }}%</b>
+      </div>
+      <div class="mission-progress-track early"><span style="width: {{ mission.early.progress }}%"></span></div>
+      <div class="early-targets">
+        <span>500 Subs</span>
+        <span>3 Public Uploads / 90d</span>
+        <span>3M Shorts یا 3K Watch Hours</span>
+      </div>
+    </div>
+
+    {% if mission.upcoming %}
+    <div class="mission-policy-warning">
+      <i data-lucide="calendar-clock"></i>
+      <div>
+        <strong>Policy Change آماده است</strong>
+        <span>از 2027-02-01 Mission خودکار Full YPP را روی 20M Shorts / 8K Watch Hours تغییر می‌دهد.</span>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="mission-report-box">
+      <div>
+        <span class="section-kicker">MIDNIGHT REPORT</span>
+        <strong>{{ 'فعال' if mission.daily_report and mission.enabled else 'غیرفعال' }}</strong>
+        <small>هر شب ساعت 00:00 · {{ mission.timezone }}</small>
+      </div>
+      <div class="mission-report-actions">
+        <form method="post" action="{{ url_for('missions_refresh', channel_id=channel.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-soft" type="submit"><i data-lucide="refresh-cw"></i> Sync Mission</button>
+        </form>
+        <form method="post" action="{{ url_for('missions_settings', channel_id=channel.id) }}" class="mission-settings-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label class="mission-toggle"><input type="checkbox" name="enabled" {% if mission.enabled %}checked{% endif %}><span></span>Mission</label>
+          <label class="mission-toggle"><input type="checkbox" name="daily_report" {% if mission.daily_report %}checked{% endif %}><span></span>گزارش 00:00</label>
+          <button class="btn btn-primary" type="submit">ذخیره</button>
+        </form>
+      </div>
+    </div>
+
+    {% if mission.analytics_error %}
+    <div class="mission-inline-warning"><i data-lucide="triangle-alert"></i>{{ mission.analytics_error }}</div>
+    {% endif %}
+    {% else %}
+    <div class="mission-error-state">
+      <i data-lucide="circle-alert"></i>
+      <h3>{{ channel.label }}</h3>
+      <p>{{ mission_errors.get(channel.id, 'Analytics برای این کانال در دسترس نیست.') }}</p>
+      <form method="post" action="{{ url_for('missions_refresh', channel_id=channel.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-primary">تلاش دوباره</button>
+      </form>
+    </div>
+    {% endif %}
+  </article>
+  {% else %}
+  <div class="empty-state glass-card full-span">
+    <i data-lucide="target"></i>
+    <h3>کانالی برای Mission وجود ندارد</h3>
+    <p>ابتدا یک کانال YouTube متصل کن.</p>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
