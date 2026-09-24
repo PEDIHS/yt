@@ -913,6 +913,7 @@ def video_detail(channel_id: int, video_id: str):
         playlists=playlists,
         authorization=authorization,
         page_errors=page_errors,
+        workspace_channel=channel,
     )
 
 
