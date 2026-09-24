@@ -855,6 +855,7 @@ def videos_manager():
         playlists=playlists,
         authorization=authorization,
         manager_error=manager_error,
+        workspace_channel=selected_channel,
     )
 
 
@@ -1423,12 +1424,18 @@ def long_video_upload():
                     mark_job_failed(job.id, f"Long video setup failed: {exc}")
                 flash(f"ثبت Long Video ناموفق بود: {exc}", "danger")
 
+    selected_channel_id = request.args.get("channel_id", type=int)
+    workspace_channel = next(
+        (channel for channel in channels_list if channel.id == selected_channel_id),
+        None,
+    )
     return render_template(
         "long_videos.html",
         channels=channels_list,
         channel_configs=channel_configs,
         authorization=authorization,
-        selected_channel_id=request.args.get("channel_id", type=int),
+        selected_channel_id=selected_channel_id,
+        workspace_channel=workspace_channel,
     )
 
 
@@ -1494,10 +1501,16 @@ def upload():
                 if job is not None:
                     mark_job_failed(job.id, f"Scheduling failed: {exc}")
                 flash(f"ثبت ارسال ناموفق بود: {exc}", "danger")
+    selected_channel_id = request.args.get("channel_id", type=int)
+    workspace_channel = next(
+        (channel for channel in channels_list if channel.id == selected_channel_id),
+        None,
+    )
     return render_template(
         "upload.html",
         channels=channels_list,
-        selected_channel_id=request.args.get("channel_id", type=int),
+        selected_channel_id=selected_channel_id,
+        workspace_channel=workspace_channel,
     )
 
 
