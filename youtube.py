@@ -592,29 +592,39 @@ def wait_for_video_preflight(
         rejection_reason = status.get("rejectionReason") or ""
         upload_status = status.get("uploadStatus") or ""
         failure_reason = processing.get("processingFailureReason") or ""
+        upload_failure_reason = status.get("failureReason") or ""
 
         last_payload = {
             "processing_status": processing_status,
             "upload_status": upload_status,
             "rejection_reason": rejection_reason,
             "failure_reason": failure_reason,
+            "upload_failure_reason": upload_failure_reason,
         }
         reason_text = " ".join(
             str(x).lower()
-            for x in [rejection_reason, failure_reason, upload_status]
+            for x in [rejection_reason, failure_reason, upload_failure_reason, upload_status]
             if x
         )
         copyright_signal = any(
             marker in reason_text
-            for marker in ("copyright", "claim", "duplicate")
+            for marker in ("copyright", "claim")
         )
 
-        if rejection_reason or processing_status in {"failed", "terminated"}:
+        terminal_upload_failure = upload_status in {"rejected", "failed", "deleted"}
+        terminal_processing_failure = processing_status in {"failed", "terminated"}
+        if rejection_reason or upload_failure_reason or terminal_upload_failure or terminal_processing_failure:
             return {
                 "ok": False,
                 "blocked": True,
                 "copyright_signal": copyright_signal,
-                "reason": rejection_reason or failure_reason or processing_status,
+                "reason": (
+                    rejection_reason
+                    or upload_failure_reason
+                    or failure_reason
+                    or upload_status
+                    or processing_status
+                ),
                 "detail": last_payload,
             }
 
@@ -659,6 +669,12 @@ def publish_checked_video(
         if key in status:
             body["status"][key] = status[key]
     updated = service.videos().update(part="status", body=body).execute()
+    with SessionLocal() as db:
+        channel = db.get(YouTubeChannel, channel_id)
+        if channel:
+            channel.last_used_at = datetime.utcnow()
+            channel.video_count = max(0, channel.video_count + 1)
+            db.commit()
     return {
         "video_id": video_id,
         "video_url": f"https://youtube.com/shorts/{video_id}",
@@ -731,7 +747,8 @@ def upload_to_youtube(
             raise RuntimeError("YouTube API did not return a video ID")
 
         channel.last_used_at = datetime.utcnow()
-        channel.video_count = max(0, channel.video_count + 1)
+        if not force_private:
+            channel.video_count = max(0, channel.video_count + 1)
         db.commit()
 
         return {
