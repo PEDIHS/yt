@@ -1246,26 +1246,38 @@ def publishing_bulk_queue(channel_id: int):
 @login_required
 def queue_publish_now(job_id: int):
     require_csrf()
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        channel_id = job.channel_id if job else None
     try:
         release_job_now(job_id)
         flash(f"Job #{job_id} برای انتشار فوری آزاد شد.", "success")
         _audit("panel", "scheduled_job_released", f"job_id={job_id}")
     except Exception as exc:
         flash(f"انتشار فوری ناموفق بود: {exc}", "danger")
-    return redirect(url_for("publishing_page", channel_id=channel_id))
+    return redirect(
+        url_for("publishing_page", channel_id=channel_id)
+        if channel_id else url_for("publishing_page")
+    )
 
 
 @app.post("/queue/<int:job_id>/cancel")
 @login_required
 def queue_cancel(job_id: int):
     require_csrf()
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        channel_id = job.channel_id if job else None
     try:
         cancel_scheduled_job(job_id)
         flash(f"Job #{job_id} از صف حذف شد.", "success")
         _audit("panel", "scheduled_job_cancelled", f"job_id={job_id}")
     except Exception as exc:
         flash(f"لغو Job ناموفق بود: {exc}", "danger")
-    return redirect(url_for("publishing_page", channel_id=channel_id))
+    return redirect(
+        url_for("publishing_page", channel_id=channel_id)
+        if channel_id else url_for("publishing_page")
+    )
 
 
 @app.post("/api/long-videos/probe")
