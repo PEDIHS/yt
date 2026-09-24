@@ -150,6 +150,18 @@ class ChannelPublishingConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class ChannelMissionState(Base):
+    __tablename__ = "channel_mission_states"
+
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("youtube_channels.id", ondelete="CASCADE"), primary_key=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    daily_report: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_report_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class UploadSchedule(Base):
     __tablename__ = "upload_schedules"
 
