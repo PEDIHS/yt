@@ -50,6 +50,7 @@ from integrations import (
     validate_telegram_token,
 )
 from models import AuditLog, OAuthRequest, UploadJob, YouTubeChannel
+from missions import build_channel_mission, set_mission_settings
 from security import credentials_match, csrf_token, login_required, require_csrf
 from youtube import (
     add_video_to_playlist,
@@ -476,6 +477,63 @@ def integrations_google():
     except Exception as exc:
         flash(f"Google OAuth ذخیره نشد: {exc}", "danger")
     return redirect(url_for("integrations_page"))
+
+
+@app.get("/missions")
+@login_required
+def missions_page():
+    with SessionLocal() as db:
+        channels = db.query(YouTubeChannel).order_by(YouTubeChannel.id.asc()).all()
+
+    missions = {}
+    errors = {}
+    if channels:
+        workers = min(3, len(channels))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="missions-panel") as executor:
+            futures = {
+                executor.submit(build_channel_mission, channel.id): channel.id
+                for channel in channels
+            }
+            for future in as_completed(futures):
+                channel_id = futures[future]
+                try:
+                    missions[channel_id] = future.result()
+                except Exception as exc:
+                    errors[channel_id] = str(exc)
+
+    return render_template(
+        "missions.html",
+        channels=channels,
+        missions=missions,
+        mission_errors=errors,
+    )
+
+
+@app.post("/missions/<int:channel_id>/refresh")
+@login_required
+def missions_refresh(channel_id: int):
+    require_csrf()
+    try:
+        build_channel_mission(channel_id, refresh=True)
+        flash("Mission با تازه‌ترین Analytics بروزرسانی شد.", "success")
+    except Exception as exc:
+        flash(f"Mission بروزرسانی نشد: {exc}", "danger")
+    return redirect(url_for("missions_page"))
+
+
+@app.post("/missions/<int:channel_id>/settings")
+@login_required
+def missions_settings(channel_id: int):
+    require_csrf()
+    with SessionLocal() as db:
+        channel = db.get(YouTubeChannel, channel_id)
+        if not channel:
+            return "Channel not found", 404
+    enabled = request.form.get("enabled") == "on"
+    daily_report = request.form.get("daily_report") == "on"
+    set_mission_settings(channel_id, enabled=enabled, daily_report=daily_report)
+    flash("تنظیمات Mission ذخیره شد.", "success")
+    return redirect(url_for("missions_page"))
 
 
 @app.get("/channels")
