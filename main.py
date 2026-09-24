@@ -1509,6 +1509,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if share.status == "cancelled":
                 await query.edit_message_text("❌ این درخواست قبلاً لغو شده.", reply_markup=None)
                 return
+            if share.status == "superseded":
+                await query.edit_message_text("♻️ این کارت تکراری و منقضی شده است.", reply_markup=None)
+                return
+
+            duplicate = db.query(InstagramDirectShare).filter(
+                InstagramDirectShare.id != share_id,
+                InstagramDirectShare.media_url == share.media_url,
+                InstagramDirectShare.upload_job_id.isnot(None),
+                InstagramDirectShare.status.in_(["confirmed", "scheduled", "queued"]),
+            ).order_by(InstagramDirectShare.id.desc()).first()
+            if duplicate:
+                share.status = "superseded"
+                db.commit()
+                await query.edit_message_text(
+                    f"♻️ این Reel قبلاً ثبت شده؛ Job #{duplicate.upload_job_id}",
+                    reply_markup=None,
+                )
+                return
+
             if not channel or not channel.is_active:
                 await query.edit_message_text(
                     "⚠️ این کانال فعال نیست. یک کانال دیگر انتخاب کن:",
@@ -1565,6 +1584,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if share.status == "cancelled":
                 await query.edit_message_text("❌ این درخواست لغو شده.", reply_markup=None)
                 return
+            if share.status == "superseded":
+                await query.edit_message_text("♻️ این کارت تکراری و منقضی شده است.", reply_markup=None)
+                return
             share.status = "pending_channel"
             share.selected_channel_id = None
             share.selected_at = None
@@ -1611,6 +1633,28 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("igconfirm:"):
         _, raw_share, raw_channel = data.split(":", 2)
         share_id, channel_id = int(raw_share), int(raw_channel)
+
+        # Cross-card dedupe: an older Telegram card cannot create another
+        # job for media that was already registered through a newer card.
+        with SessionLocal() as db:
+            current = db.get(InstagramDirectShare, share_id)
+            if not current:
+                await query.edit_message_text("⚠️ این درخواست پیدا نشد.", reply_markup=None)
+                return
+            duplicate = db.query(InstagramDirectShare).filter(
+                InstagramDirectShare.id != share_id,
+                InstagramDirectShare.media_url == current.media_url,
+                InstagramDirectShare.upload_job_id.isnot(None),
+                InstagramDirectShare.status.in_(["confirmed", "scheduled", "queued"]),
+            ).order_by(InstagramDirectShare.id.desc()).first()
+            if duplicate:
+                current.status = "superseded"
+                db.commit()
+                await query.edit_message_text(
+                    f"♻️ این Reel قبلاً ثبت شده؛ Job #{duplicate.upload_job_id}",
+                    reply_markup=None,
+                )
+                return
 
         # Atomic state transition: only one confirmation can create a job.
         with SessionLocal() as db:
