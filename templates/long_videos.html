@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+{% block title %}Long Video Studio | YT Studio{% endblock %}
+{% block eyebrow %}LONG-FORM PUBLISHING PIPELINE{% endblock %}
+{% block heading %}Long Video Studio{% endblock %}
+{% block subheading %}دانلود از لینک، آماده‌سازی با بالاترین کیفیت، Thumbnail و Metadata کامل، Copyright Preflight و انتشار زمان‌بندی‌شده{% endblock %}
+
+{% block content %}
+<section class="long-video-hero glass-card">
+  <div class="long-video-hero-copy">
+    <div class="long-video-icon"><i data-lucide="film"></i></div>
+    <div>
+      <span class="section-kicker">DOWNLOAD → PREPARE → CHECK → PUBLISH</span>
+      <h2>استودیوی ویدیوهای طولانی</h2>
+      <p>لینک عمومی ویدیو را بده؛ سیستم بهترین Video + Audio را دانلود و Merge می‌کند، ویدیو را Private روی YouTube آماده می‌کند، Thumbnail و Metadata را اعمال می‌کند و قبل از انتشار بررسی YouTube را پاس می‌کند.</p>
+    </div>
+  </div>
+  <div class="long-pipeline">
+    <div><span>01</span><strong>Source</strong><small>Probe & Max Quality</small></div>
+    <i data-lucide="chevron-left"></i>
+    <div><span>02</span><strong>Private</strong><small>Upload + Thumbnail</small></div>
+    <i data-lucide="chevron-left"></i>
+    <div><span>03</span><strong>Preflight</strong><small>Process / Claim Check</small></div>
+    <i data-lucide="chevron-left"></i>
+    <div><span>04</span><strong>Publish</strong><small>Exact Schedule</small></div>
+  </div>
+</section>
+
+{% if channels %}
+<form method="post" enctype="multipart/form-data" class="long-studio-layout" id="longVideoForm">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="long-studio-main">
+    <section class="glass-card long-section">
+      <div class="long-section-head">
+        <div><span class="section-kicker">SOURCE INSPECTOR</span><h2>منبع دانلود</h2><p>لینک مستقیم یا صفحه ویدیویی عمومی؛ Playlist دانلود نمی‌شود.</p></div>
+        <i data-lucide="link-2"></i>
+      </div>
+      <div class="long-source-row">
+        <label class="grow">لینک ویدیو
+          <input id="longSourceUrl" name="source_url" type="url" placeholder="https://..." required autocomplete="off">
+        </label>
+        <button class="btn btn-soft long-probe-btn" type="button" id="probeLongVideo"><i data-lucide="scan-search"></i> آنالیز لینک</button>
+      </div>
+      <div class="long-source-status" id="longSourceStatus" hidden></div>
+      <div class="long-source-preview" id="longSourcePreview" hidden>
+        <img id="longSourceThumb" alt="">
+        <div>
+          <span class="section-kicker" id="longSourceExtractor">SOURCE</span>
+          <strong id="longSourceTitle"></strong>
+          <div class="long-source-meta">
+            <span><i data-lucide="clock-3"></i><b id="longSourceDuration">—</b></span>
+            <span><i data-lucide="monitor"></i><b id="longSourceResolution">—</b></span>
+            <span><i data-lucide="user-round"></i><b id="longSourceUploader">—</b></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="glass-card long-section">
+      <div class="long-section-head">
+        <div><span class="section-kicker">YOUTUBE METADATA</span><h2>عنوان و توضیحات</h2><p>Metadata مستقل Long-form؛ هیچ #Shorts یا لینک Shorts به این مسیر اضافه نمی‌شود.</p></div>
+        <i data-lucide="notebook-pen"></i>
+      </div>
+      <div class="form-grid two-cols">
+        <label class="span-2">عنوان YouTube <span class="hint">حداکثر 100 کاراکتر</span>
+          <input id="longTitle" name="title" maxlength="100" required placeholder="عنوان حرفه‌ای ویدیو">
+        </label>
+        <label class="span-2">Description
+          <textarea id="longDescription" name="description" rows="8" maxlength="5000" placeholder="توضیحات کامل، لینک‌ها، منابع و CTA..."></textarea>
+        </label>
+        <label class="span-2">Tags <span class="hint">با کاما جدا کن</span>
+          <input name="tags" placeholder="entertainment, funny, comedy, persian">
+        </label>
+        <label class="span-2">Hashtags <span class="hint">در Description قرار می‌گیرند</span>
+          <input name="hashtags" placeholder="#سرگرمی #کمدی">
+        </label>
+      </div>
+    </section>
+
+    <section class="glass-card long-section">
+      <div class="long-section-head">
+        <div><span class="section-kicker">THUMBNAIL</span><h2>تصویر بندانگشتی</h2><p>JPEG/PNG تا 2MB. اگر خالی باشد YouTube Thumbnail خودکار می‌سازد.</p></div>
+        <i data-lucide="image"></i>
+      </div>
+      <label class="long-thumb-picker" id="longThumbPicker">
+        <input id="longThumbnail" type="file" name="thumbnail" accept="image/jpeg,image/png">
+        <div class="long-thumb-empty" id="longThumbEmpty">
+          <i data-lucide="image-up"></i>
+          <strong>Thumbnail را انتخاب کن</strong>
+          <small>16:9 پیشنهاد می‌شود · 1280×720 یا بالاتر</small>
+        </div>
+        <img id="longThumbPreview" alt="Thumbnail preview" hidden>
+      </label>
+    </section>
+  </div>
+
+  <aside class="long-studio-side">
+    <section class="glass-card long-section">
+      <div class="long-section-head compact">
+        <div><span class="section-kicker">DESTINATION</span><h2>کانال و انتشار</h2></div>
+        <i data-lucide="youtube"></i>
+      </div>
+
+      <label>کانال مقصد
+        <select name="channel_id" id="longChannel" required>
+          {% for ch in channels %}
+          {% set auth = authorization.get(ch.id, {}) %}
+          <option value="{{ ch.id }}" data-manage="{{ '1' if auth.manage or auth.force_ssl else '0' }}">{{ ch.label }} — {{ ch.title }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div class="long-oauth-warning" id="longOauthWarning" hidden>
+        <i data-lucide="shield-alert"></i>
+        <div><strong>OAuth مدیریت کامل نیست</strong><small>برای Private → Check → Publish یک‌بار این کانال را Reconnect کن. Job ساخته می‌شود ولی تا Reconnect دانلود شروع نمی‌کند.</small></div>
+      </div>
+
+      <label>کیفیت دانلود
+        <select name="quality">
+          <option value="max">Maximum · بهترین کیفیت موجود</option>
+          <option value="2160">تا 4K / 2160p</option>
+          <option value="1440">تا 1440p</option>
+          <option value="1080">تا 1080p</option>
+          <option value="720">تا 720p</option>
+        </select>
+      </label>
+
+      <label>Privacy نهایی
+        <select name="privacy">
+          <option value="public">Public</option>
+          <option value="unlisted">Unlisted</option>
+          <option value="private">Private</option>
+        </select>
+      </label>
+
+      <label>Category
+        <select name="category_id">
+          <option value="24" selected>Entertainment</option>
+          <option value="23">Comedy</option>
+          <option value="22">People & Blogs</option>
+          <option value="1">Film & Animation</option>
+          <option value="10">Music</option>
+          <option value="17">Sports</option>
+          <option value="20">Gaming</option>
+          <option value="25">News & Politics</option>
+          <option value="26">Howto & Style</option>
+          <option value="27">Education</option>
+          <option value="28">Science & Technology</option>
+        </select>
+      </label>
+
+      <div class="long-settings-grid">
+        <label>Default language<input name="default_language" maxlength="20" placeholder="fa"></label>
+        <label>Audio language<input name="audio_language" maxlength="20" placeholder="fa"></label>
+      </div>
+
+      <label>License
+        <select name="license">
+          <option value="youtube">Standard YouTube License</option>
+          <option value="creativeCommon">Creative Commons</option>
+        </select>
+      </label>
+
+      <div class="long-toggles">
+        <label class="toggle-row"><input type="checkbox" name="embeddable" checked><span><strong>Allow Embed</strong><small>نمایش در سایت‌های دیگر</small></span></label>
+        <label class="toggle-row"><input type="checkbox" name="notify_subscribers" checked><span><strong>Notify Subscribers</strong><small>اعلان انتشار برای سابسکرایبرها</small></span></label>
+        <label class="toggle-row"><input type="checkbox" name="made_for_kids"><span><strong>Made for Kids</strong><small>فقط اگر محتوا واقعاً مخصوص کودک است</small></span></label>
+      </div>
+    </section>
+
+    <section class="glass-card long-section">
+      <div class="long-section-head compact">
+        <div><span class="section-kicker">RELEASE CONTROL</span><h2>زمان انتشار</h2></div>
+        <i data-lucide="calendar-clock"></i>
+      </div>
+      <label>روش انتشار
+        <select name="publish_mode" id="longPublishMode">
+          <option value="manual" selected>آماده‌سازی الان · انتشار در زمان مشخص</option>
+          <option value="immediate">آماده‌سازی و انتشار همین الان</option>
+        </select>
+      </label>
+      <label id="longScheduleField">زمان انتشار
+        <input type="datetime-local" name="scheduled_at" id="longScheduledAt">
+        <span class="hint" id="longTimezoneHint">Timezone کانال</span>
+      </label>
+      <div class="long-preflight-note">
+        <i data-lucide="shield-check"></i>
+        <div><strong>Copyright Preflight فعال است</strong><small>قبل از Public شدن، ویدیو Private پردازش و سیگنال‌های API YouTube بررسی می‌شود. Claim/Reject قابل‌مشاهده انتشار را متوقف و به ادمین گزارش می‌کند.</small></div>
+      </div>
+      <button class="btn btn-primary long-submit" type="submit"><i data-lucide="rocket"></i> ساخت Long Video Job</button>
+    </section>
+  </aside>
+</form>
+{% else %}
+<div class="empty-state glass-card"><i data-lucide="youtube"></i><h3>کانال فعالی وجود ندارد</h3><p>ابتدا یک کانال YouTube متصل کن.</p></div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const source = document.getElementById('longSourceUrl');
+  const probe = document.getElementById('probeLongVideo');
+  const status = document.getElementById('longSourceStatus');
+  const preview = document.getElementById('longSourcePreview');
+  const title = document.getElementById('longTitle');
+  const description = document.getElementById('longDescription');
+  const csrf = document.querySelector('#longVideoForm input[name="csrf_token"]')?.value;
+  const configs = {{ channel_configs|tojson }};
+  const channel = document.getElementById('longChannel');
+  const oauthWarning = document.getElementById('longOauthWarning');
+  const timezoneHint = document.getElementById('longTimezoneHint');
+  const mode = document.getElementById('longPublishMode');
+  const scheduleField = document.getElementById('longScheduleField');
+  const scheduledAt = document.getElementById('longScheduledAt');
+
+  const duration = seconds => {
+    seconds = Number(seconds || 0);
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return h ? h + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0') : m + ':' + String(s).padStart(2,'0');
+  };
+
+  const refreshChannel = () => {
+    if (!channel) return;
+    const opt = channel.options[channel.selectedIndex];
+    oauthWarning.hidden = opt?.dataset.manage === '1';
+    const cfg = configs[channel.value] || {};
+    timezoneHint.textContent = 'Timezone: ' + (cfg.timezone || 'Asia/Tehran');
+  };
+  channel?.addEventListener('change', refreshChannel);
+  refreshChannel();
+
+  const refreshMode = () => {
+    const manual = mode?.value === 'manual';
+    scheduleField.style.display = manual ? 'grid' : 'none';
+    if (scheduledAt) scheduledAt.required = manual;
+  };
+  mode?.addEventListener('change', refreshMode);
+  refreshMode();
+
+  probe?.addEventListener('click', async () => {
+    if (!source?.value.trim()) return;
+    probe.disabled = true;
+    status.hidden = false;
+    preview.hidden = true;
+    status.className = 'long-source-status loading';
+    status.innerHTML = '<span class="connect-spinner"></span><div><strong>در حال تحلیل لینک...</strong><small>Metadata و بهترین Stream بررسی می‌شود.</small></div>';
+    try {
+      const body = new FormData();
+      body.append('csrf_token', csrf || '');
+      body.append('source_url', source.value.trim());
+      const response = await fetch('{{ url_for("api_long_video_probe") }}', {method:'POST', body, credentials:'same-origin'});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Probe failed');
+      status.className = 'long-source-status success';
+      status.innerHTML = '<i data-lucide="circle-check"></i><div><strong>منبع آماده است</strong><small>در زمان Job بالاترین کیفیت انتخاب و دانلود می‌شود.</small></div>';
+      document.getElementById('longSourceTitle').textContent = data.title || 'Untitled';
+      document.getElementById('longSourceDuration').textContent = duration(data.duration);
+      document.getElementById('longSourceResolution').textContent = data.width && data.height ? data.width + '×' + data.height : 'Auto Max';
+      document.getElementById('longSourceUploader').textContent = data.uploader || '—';
+      document.getElementById('longSourceExtractor').textContent = (data.extractor || 'MEDIA SOURCE').toUpperCase();
+      const img = document.getElementById('longSourceThumb');
+      if (data.thumbnail) { img.src = data.thumbnail; img.style.display = ''; } else { img.style.display = 'none'; }
+      preview.hidden = false;
+      if (!title.value.trim() && data.title) title.value = data.title.slice(0,100);
+      if (!description.value.trim() && data.description) description.value = data.description.slice(0,5000);
+      if (window.lucide) window.lucide.createIcons();
+    } catch (err) {
+      status.className = 'long-source-status error';
+      status.innerHTML = '<i data-lucide="circle-x"></i><div><strong>لینک قابل پردازش نیست</strong><small></small></div>';
+      status.querySelector('small').textContent = err?.message || 'خطای نامشخص';
+      if (window.lucide) window.lucide.createIcons();
+    } finally {
+      probe.disabled = false;
+    }
+  });
+
+  const thumb = document.getElementById('longThumbnail');
+  const thumbPreview = document.getElementById('longThumbPreview');
+  const thumbEmpty = document.getElementById('longThumbEmpty');
+  thumb?.addEventListener('change', () => {
+    const file = thumb.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      alert('Thumbnail باید حداکثر 2MB باشد.');
+      thumb.value = '';
+      return;
+    }
+    thumbPreview.src = URL.createObjectURL(file);
+    thumbPreview.hidden = false;
+    thumbEmpty.hidden = true;
+  });
+})();
+</script>
+{% endblock %}
