@@ -1,22 +1,34 @@
 from __future__ import annotations
 
+import json
 import logging
+import mimetypes
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import httpx
 
 from config import Config
 from db import SessionLocal
-from downloader import cleanup_download, download_video
+from downloader import cleanup_download, download_external_video, download_video
 from integrations import get_secret, resolve_telegram_token
-from models import InstagramDirectShare, OAuthRequest, TelegramAdmin, UploadJob, YouTubeChannel
+from models import (
+    InstagramDirectShare,
+    OAuthRequest,
+    TelegramAdmin,
+    UploadJob,
+    UploadJobOption,
+    UploadSchedule,
+    YouTubeChannel,
+)
 from security import new_token
 from youtube import (
     discard_preflight_video,
     publish_checked_video,
     publishing_preflight_capability,
+    set_video_thumbnail,
     upload_to_youtube,
     wait_for_video_preflight,
 )
@@ -139,6 +151,16 @@ def _send_telegram_job_event(
                 {"text": "🔐 اتصال مجدد YouTube", "url": reconnect_url}
             ]]
         }
+    elif event == "ready_scheduled":
+        text = (
+            f"✅ ویدیوی Long آماده انتشار است.\n\n"
+            f"🎬 {title}\n"
+            f"📺 {channel_name}\n"
+            f"🛡 بررسی قبل از انتشار پاس شد\n"
+            f"🔒 ویدیو تا زمان تعیین‌شده Private می‌ماند\n"
+            f"🧾 Job #{job_id}"
+        )
+        reply_markup = None
     elif event == "completed":
         text = (
             f"✅ ویدیو با موفقیت منتشر شد.\n\n"
@@ -218,6 +240,348 @@ def create_job(
         db.commit()
         db.refresh(job)
         return job
+
+
+def configure_long_job(
+    job_id: int,
+    *,
+    quality: str = "max",
+    tags: str = "",
+    category_id: str = "24",
+    made_for_kids: bool = False,
+    embeddable: bool = True,
+    license_name: str = "youtube",
+    notify_subscribers: bool = True,
+    default_language: str = "",
+    audio_language: str = "",
+    thumbnail_path: Optional[str] = None,
+) -> UploadJobOption:
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        if not job:
+            raise RuntimeError("Upload job not found")
+        option = db.get(UploadJobOption, job_id)
+        if option is None:
+            option = UploadJobOption(job_id=job_id)
+            db.add(option)
+        option.content_type = "long"
+        option.quality = quality if quality in {"max", "2160", "1440", "1080", "720"} else "max"
+        option.tags = (tags or "").strip()[:4000]
+        option.category_id = str(category_id or "24")[:10]
+        option.made_for_kids = bool(made_for_kids)
+        option.embeddable = bool(embeddable)
+        option.license = license_name if license_name in {"youtube", "creativeCommon"} else "youtube"
+        option.notify_subscribers = bool(notify_subscribers)
+        option.default_language = (default_language or "").strip()[:20]
+        option.audio_language = (audio_language or "").strip()[:20]
+        option.thumbnail_path = thumbnail_path
+        db.commit()
+        db.refresh(option)
+        return option
+
+
+def _job_option(job_id: int) -> Optional[UploadJobOption]:
+    with SessionLocal() as db:
+        return db.get(UploadJobOption, job_id)
+
+
+def _long_tags(raw: str) -> list[str]:
+    return [
+        item.strip()
+        for item in (raw or "").replace("\n", ",").split(",")
+        if item.strip()
+    ][:100]
+
+
+def _apply_job_thumbnail(job_id: int, channel_id: int, video_id: str) -> None:
+    with SessionLocal() as db:
+        option = db.get(UploadJobOption, job_id)
+        thumb = option.thumbnail_path if option else None
+    if not thumb:
+        return
+    path = Path(thumb)
+    if not path.is_file():
+        raise RuntimeError("Thumbnail file is missing")
+    mime_type, _ = mimetypes.guess_type(str(path))
+    if mime_type not in {"image/jpeg", "image/png"}:
+        raise RuntimeError("Thumbnail must be JPEG or PNG")
+    content = path.read_bytes()
+    if len(content) > 2 * 1024 * 1024:
+        raise RuntimeError("Thumbnail exceeds YouTube 2MB limit")
+    set_video_thumbnail(channel_id, video_id, content, mime_type)
+
+
+def _cleanup_long_asset(job_id: int) -> None:
+    with SessionLocal() as db:
+        option = db.get(UploadJobOption, job_id)
+        path_value = option.thumbnail_path if option else None
+        if option:
+            option.thumbnail_path = None
+            db.commit()
+    if path_value:
+        try:
+            path = Path(path_value).resolve()
+            if path.is_file():
+                path.unlink(missing_ok=True)
+            parent = path.parent
+            if parent.name == f"job-{job_id}" and parent.is_dir():
+                parent.rmdir()
+        except Exception:
+            logger.exception("Failed to clean long-video asset for Job %s", job_id)
+
+
+def _mark_preflight_blocked(job_id: int, channel_id: int, video_id: str, check: dict) -> dict:
+    reason = str(check.get("reason") or "YouTube preflight failed")
+    try:
+        discard_preflight_video(channel_id, video_id)
+    except Exception:
+        logger.exception("Could not delete blocked private video %s", video_id)
+
+    blocked_status = "copyright_blocked" if check.get("copyright_signal") else "preflight_blocked"
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        if job:
+            job.status = blocked_status
+            job.error = reason[:4000]
+            job.video_id = None
+            job.video_url = None
+            job.finished_at = datetime.utcnow()
+        option = db.get(UploadJobOption, job_id)
+        if option:
+            option.checked_at = datetime.utcnow()
+        share = db.query(InstagramDirectShare).filter_by(upload_job_id=job_id).one_or_none()
+        if share:
+            share.status = blocked_status
+        db.commit()
+
+    _cleanup_long_asset(job_id)
+    _send_telegram_job_event(
+        job_id,
+        event="copyright_blocked" if check.get("copyright_signal") else "preflight_blocked",
+        error=reason,
+    )
+    return {
+        "success": False,
+        "blocked": True,
+        "job_id": job_id,
+        "error": reason,
+        "copyright_signal": bool(check.get("copyright_signal")),
+    }
+
+
+def _process_long_job(job_id: int, *, hold_after_check: bool = False) -> dict:
+    file_path: Optional[str] = None
+    staged_video_id: Optional[str] = None
+    published_ok = False
+    try:
+        with SessionLocal() as db:
+            job = db.get(UploadJob, job_id)
+            option = db.get(UploadJobOption, job_id)
+            if not job or not option or option.content_type != "long":
+                raise RuntimeError("Long-video job configuration is missing")
+            channel_id = job.channel_id
+            source_url = job.source_url
+            title = job.title
+            description = job.description
+            hashtags = job.hashtags
+            privacy = job.privacy
+            quality = option.quality
+            tags = _long_tags(option.tags)
+            category_id = option.category_id
+            made_for_kids = option.made_for_kids
+            embeddable = option.embeddable
+            license_name = option.license
+            notify_subscribers = option.notify_subscribers
+            default_language = option.default_language
+            audio_language = option.audio_language
+
+        capability = publishing_preflight_capability(channel_id)
+        if not capability.get("ok"):
+            message = (
+                "YouTube OAuth is missing management permission required for "
+                "private preflight publishing. Reconnect the channel once."
+            )
+            with SessionLocal() as db:
+                job = db.get(UploadJob, job_id)
+                if job:
+                    job.status = "reauth_required"
+                    job.error = message
+                    job.started_at = None
+                    db.commit()
+            _send_telegram_job_event(job_id, event="reauth_required", error=message)
+            return {"success": False, "needs_reauth": True, "job_id": job_id, "error": message}
+
+        with SessionLocal() as db:
+            job = db.get(UploadJob, job_id)
+            job.status = "downloading"
+            job.started_at = job.started_at or datetime.utcnow()
+            job.error = None
+            db.commit()
+
+        file_path, source_metadata = download_external_video(source_url, quality=quality)
+        if not file_path:
+            raise RuntimeError("Long-form media could not be downloaded")
+
+        with SessionLocal() as db:
+            option = db.get(UploadJobOption, job_id)
+            job = db.get(UploadJob, job_id)
+            if option:
+                option.source_metadata_json = json.dumps(source_metadata, ensure_ascii=False)[:12000]
+            if job:
+                job.status = "uploading"
+            db.commit()
+
+        _send_telegram_job_event(job_id, event="uploading")
+        result = upload_to_youtube(
+            file_path=file_path,
+            channel_id=channel_id,
+            title=title,
+            hashtags=hashtags,
+            description=description,
+            privacy=privacy,
+            force_private=True,
+            content_type="long",
+            tags=tags,
+            category_id=category_id,
+            made_for_kids=made_for_kids,
+            embeddable=embeddable,
+            license_name=license_name,
+            notify_subscribers=notify_subscribers,
+            default_language=default_language,
+            audio_language=audio_language,
+        )
+        staged_video_id = result["video_id"]
+
+        with SessionLocal() as db:
+            job = db.get(UploadJob, job_id)
+            option = db.get(UploadJobOption, job_id)
+            if job:
+                job.status = "checking"
+                job.video_id = staged_video_id
+                job.video_url = result["video_url"]
+            if option:
+                option.prepared_at = datetime.utcnow()
+            db.commit()
+
+        _apply_job_thumbnail(job_id, channel_id, staged_video_id)
+        _send_telegram_job_event(job_id, event="checking")
+        check = wait_for_video_preflight(channel_id, staged_video_id)
+        if not check.get("ok"):
+            staged_video_id = None
+            return _mark_preflight_blocked(job_id, channel_id, result["video_id"], check)
+
+        with SessionLocal() as db:
+            option = db.get(UploadJobOption, job_id)
+            if option:
+                option.checked_at = datetime.utcnow()
+            db.commit()
+
+        if hold_after_check:
+            with SessionLocal() as db:
+                job = db.get(UploadJob, job_id)
+                if job:
+                    job.status = "ready_scheduled"
+                    job.error = None
+                db.commit()
+            _cleanup_long_asset(job_id)
+            _send_telegram_job_event(job_id, event="ready_scheduled")
+            return {
+                "success": True,
+                "prepared": True,
+                "job_id": job_id,
+                "video_id": staged_video_id,
+                "video_url": result["video_url"],
+            }
+
+        published = publish_checked_video(
+            channel_id,
+            staged_video_id,
+            privacy=privacy,
+            content_type="long",
+        )
+        published_ok = True
+        with SessionLocal() as db:
+            job = db.get(UploadJob, job_id)
+            if job:
+                job.status = "completed"
+                job.video_id = published["video_id"]
+                job.video_url = published["video_url"]
+                job.error = None
+                job.finished_at = datetime.utcnow()
+            db.commit()
+        _cleanup_long_asset(job_id)
+        _send_telegram_job_event(job_id, event="completed", video_url=published["video_url"])
+        return {"success": True, "job_id": job_id, **published}
+    except Exception as exc:
+        logger.exception("Long-video Job %s failed", job_id)
+        if staged_video_id and not published_ok:
+            try:
+                discard_preflight_video(channel_id, staged_video_id)
+            except Exception:
+                logger.exception("Could not clean staged long-form video %s", staged_video_id)
+        with SessionLocal() as db:
+            job = db.get(UploadJob, job_id)
+            if job:
+                job.status = "failed"
+                job.error = str(exc)[:4000]
+                job.finished_at = datetime.utcnow()
+                db.commit()
+        _send_telegram_job_event(job_id, event="failed", error=str(exc))
+        return {"success": False, "job_id": job_id, "error": str(exc)}
+    finally:
+        cleanup_download(file_path)
+
+
+def prepare_long_job_for_schedule(job_id: int):
+    return _executor.submit(_process_long_job, job_id, hold_after_check=True)
+
+
+def finalize_prepared_long_job(job_id: int) -> dict:
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        option = db.get(UploadJobOption, job_id)
+        if not job or not option or option.content_type != "long":
+            raise RuntimeError("Long-video job not found")
+        channel_id = job.channel_id
+        video_id = job.video_id
+        privacy = job.privacy
+
+    if not video_id:
+        return _process_long_job(job_id, hold_after_check=False)
+
+    capability = publishing_preflight_capability(channel_id)
+    if not capability.get("ok"):
+        message = "YouTube management permission is required before scheduled publication."
+        with SessionLocal() as db:
+            job = db.get(UploadJob, job_id)
+            if job:
+                job.status = "reauth_required"
+                job.error = message
+                db.commit()
+        _send_telegram_job_event(job_id, event="reauth_required", error=message)
+        return {"success": False, "needs_reauth": True, "job_id": job_id, "error": message}
+
+    check = wait_for_video_preflight(channel_id, video_id, timeout_seconds=90, poll_seconds=5)
+    if not check.get("ok"):
+        return _mark_preflight_blocked(job_id, channel_id, video_id, check)
+
+    published = publish_checked_video(
+        channel_id,
+        video_id,
+        privacy=privacy,
+        content_type="long",
+    )
+    with SessionLocal() as db:
+        job = db.get(UploadJob, job_id)
+        if job:
+            job.status = "completed"
+            job.video_id = published["video_id"]
+            job.video_url = published["video_url"]
+            job.error = None
+            job.finished_at = datetime.utcnow()
+        db.commit()
+    _send_telegram_job_event(job_id, event="completed", video_url=published["video_url"])
+    return {"success": True, "job_id": job_id, **published}
 
 
 def mark_job_failed(job_id: int, error: str) -> None:
@@ -352,6 +716,10 @@ def resume_reauth_jobs_for_channel(channel_id: int) -> list[int]:
 
 
 def process_job(job_id: int) -> dict:
+    option = _job_option(job_id)
+    if option and option.content_type == "long":
+        return _process_long_job(job_id, hold_after_check=False)
+
     file_path: Optional[str] = None
     staged_video_id: Optional[str] = None
     published_ok = False
