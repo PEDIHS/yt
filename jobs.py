@@ -11,7 +11,7 @@ from config import Config
 from db import SessionLocal
 from downloader import cleanup_download, download_video
 from integrations import get_secret, resolve_telegram_token
-from models import TelegramAdmin, UploadJob, YouTubeChannel
+from models import InstagramDirectShare, TelegramAdmin, UploadJob, YouTubeChannel
 from youtube import (
     discard_preflight_video,
     publish_checked_video,
@@ -80,12 +80,22 @@ def _send_telegram_job_event(
         reply_markup = None
     elif event == "copyright_blocked":
         text = (
-            f"⛔ انتشار متوقف شد؛ YouTube در بررسی قبل از انتشار مشکل تشخیص داد.\n\n"
+            f"⛔ انتشار به‌خاطر کپی‌رایت/Claim متوقف شد.\n\n"
             f"🎬 {title}\n"
             f"📺 {channel_name}\n"
             f"🧾 Job #{job_id}\n"
-            f"گزارش: {(error or 'YouTube preflight rejected the video')[:700]}\n\n"
-            f"ویدیوی Private از YouTube حذف شد و این Job از مسیر انتشار خارج شد."
+            f"گزارش YouTube: {(error or 'copyright/claim')[:700]}\n\n"
+            f"ویدیوی Private از YouTube حذف شد و از صف فعال انتشار خارج شد."
+        )
+        reply_markup = None
+    elif event == "preflight_blocked":
+        text = (
+            f"⚠️ انتشار قبل از Public شدن متوقف شد.\n\n"
+            f"🎬 {title}\n"
+            f"📺 {channel_name}\n"
+            f"🧾 Job #{job_id}\n"
+            f"گزارش YouTube: {(error or 'pre-publication check failed')[:700]}\n\n"
+            f"ویدیوی Private حذف شد و از صف فعال انتشار خارج شد."
         )
         reply_markup = None
     elif event == "completed":
@@ -186,6 +196,8 @@ def enqueue_job(job_id: int):
 
 def process_job(job_id: int) -> dict:
     file_path: Optional[str] = None
+    staged_video_id: Optional[str] = None
+    published_ok = False
     try:
         with SessionLocal() as db:
             job = db.get(UploadJob, job_id)
@@ -223,6 +235,7 @@ def process_job(job_id: int) -> dict:
             force_private=True,
         )
         video_id = result["video_id"]
+        staged_video_id = video_id
 
         with SessionLocal() as db:
             job = db.get(UploadJob, job_id)
@@ -241,18 +254,23 @@ def process_job(job_id: int) -> dict:
             except Exception:
                 logger.exception("Could not delete blocked private video %s", video_id)
 
+            blocked_status = "copyright_blocked" if check.get("copyright_signal") else "preflight_blocked"
             with SessionLocal() as db:
                 job = db.get(UploadJob, job_id)
-                job.status = "copyright_blocked" if check.get("copyright_signal") else "preflight_blocked"
+                job.status = blocked_status
                 job.error = reason[:4000]
                 job.video_id = None
                 job.video_url = None
                 job.finished_at = datetime.utcnow()
+                share = db.query(InstagramDirectShare).filter_by(upload_job_id=job_id).one_or_none()
+                if share:
+                    share.status = blocked_status
                 db.commit()
 
+            staged_video_id = None
             _send_telegram_job_event(
                 job_id,
-                event="copyright_blocked",
+                event="copyright_blocked" if check.get("copyright_signal") else "preflight_blocked",
                 error=reason,
             )
             return {
@@ -269,6 +287,7 @@ def process_job(job_id: int) -> dict:
             privacy=privacy,
         )
         result.update(published)
+        published_ok = True
 
         with SessionLocal() as db:
             job = db.get(UploadJob, job_id)
@@ -276,6 +295,9 @@ def process_job(job_id: int) -> dict:
             job.video_id = result["video_id"]
             job.video_url = result["video_url"]
             job.finished_at = datetime.utcnow()
+            share = db.query(InstagramDirectShare).filter_by(upload_job_id=job_id).one_or_none()
+            if share:
+                share.status = "completed"
             db.commit()
         _send_telegram_job_event(
             job_id,
@@ -285,12 +307,20 @@ def process_job(job_id: int) -> dict:
         return {"success": True, "job_id": job_id, **result}
     except Exception as exc:
         logger.exception("Job %s failed", job_id)
+        if staged_video_id and not published_ok:
+            try:
+                discard_preflight_video(channel_id, staged_video_id)
+            except Exception:
+                logger.exception("Could not clean up staged private video %s", staged_video_id)
         with SessionLocal() as db:
             job = db.get(UploadJob, job_id)
             if job:
                 job.status = "failed"
                 job.error = str(exc)[:4000]
                 job.finished_at = datetime.utcnow()
+                share = db.query(InstagramDirectShare).filter_by(upload_job_id=job_id).one_or_none()
+                if share:
+                    share.status = "failed"
                 db.commit()
         _send_telegram_job_event(job_id, event="failed", error=str(exc))
         return {"success": False, "job_id": job_id, "error": str(exc)}
