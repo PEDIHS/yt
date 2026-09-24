@@ -15,10 +15,17 @@ from analytics import (
     normalize_period,
     sync_channel_analytics,
 )
-from config import Config
+from config import Config, DATA_DIR
 from db import SessionLocal, init_db
-from downloader import is_supported_instagram_url
-from jobs import create_job, enqueue_job, mark_job_failed, resume_reauth_jobs_for_channel
+from downloader import is_supported_external_url, is_supported_instagram_url, probe_external_video
+from jobs import (
+    configure_long_job,
+    create_job,
+    enqueue_job,
+    mark_job_failed,
+    prepare_long_job_for_schedule,
+    resume_reauth_jobs_for_channel,
+)
 from publishing import (
     analyze_peak_slots,
     cancel_scheduled_job,
@@ -1174,6 +1181,158 @@ def queue_cancel(job_id: int):
     return redirect(url_for("publishing_page"))
 
 
+@app.post("/api/long-videos/probe")
+@login_required
+def api_long_video_probe():
+    require_csrf()
+    source_url = request.form.get("source_url", "").strip()
+    if not is_supported_external_url(source_url):
+        return jsonify({"ok": False, "error": "لینک عمومی معتبر http/https وارد کن."}), 400
+    try:
+        payload = probe_external_video(source_url)
+        return jsonify({"ok": True, **payload})
+    except Exception as exc:
+        logger.warning("Long video probe failed: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)[:500]}), 400
+
+
+@app.route("/long-videos", methods=["GET", "POST"])
+@login_required
+def long_video_upload():
+    with SessionLocal() as db:
+        channels_list = (
+            db.query(YouTubeChannel)
+            .filter(YouTubeChannel.is_active.is_(True))
+            .order_by(YouTubeChannel.label)
+            .all()
+        )
+
+    channel_configs = {}
+    authorization = {}
+    for channel in channels_list:
+        try:
+            channel_configs[channel.id] = publishing_config_payload(channel.id)
+        except Exception:
+            channel_configs[channel.id] = {"timezone": "Asia/Tehran"}
+        try:
+            authorization[channel.id] = channel_authorization_state(channel.id)
+        except Exception as exc:
+            authorization[channel.id] = {"manage": False, "force_ssl": False, "error": str(exc)}
+
+    if request.method == "POST":
+        require_csrf()
+        source_url = request.form.get("source_url", "").strip()
+        title = request.form.get("title", "").strip()
+        description = request.form.get("description", "").strip()
+        hashtags = request.form.get("hashtags", "").strip()
+        tags = request.form.get("tags", "").strip()
+        category_id = request.form.get("category_id", "24").strip() or "24"
+        quality = request.form.get("quality", "max").strip()
+        privacy = request.form.get("privacy", "public").strip()
+        license_name = request.form.get("license", "youtube").strip()
+        default_language = request.form.get("default_language", "").strip()
+        audio_language = request.form.get("audio_language", "").strip()
+        made_for_kids = request.form.get("made_for_kids") == "on"
+        embeddable = request.form.get("embeddable") == "on"
+        notify_subscribers = request.form.get("notify_subscribers") == "on"
+        publish_mode = request.form.get("publish_mode", "manual").strip()
+
+        try:
+            channel_id = int(request.form.get("channel_id", "0"))
+        except ValueError:
+            channel_id = 0
+
+        if not is_supported_external_url(source_url):
+            flash("لینک دانلود معتبر نیست یا به آدرس خصوصی/داخلی اشاره می‌کند.", "danger")
+        elif not title:
+            flash("عنوان ویدیو الزامی است.", "danger")
+        elif len(title) > 100:
+            flash("عنوان YouTube حداکثر 100 کاراکتر است.", "danger")
+        elif privacy not in {"public", "unlisted", "private"}:
+            flash("Privacy نامعتبر است.", "danger")
+        else:
+            job = None
+            thumbnail_path = None
+            try:
+                job = create_job(
+                    channel_id=channel_id,
+                    source_url=source_url,
+                    title=title,
+                    description=description,
+                    hashtags=hashtags,
+                    privacy=privacy,
+                    source="panel-long",
+                )
+
+                thumbnail = request.files.get("thumbnail")
+                if thumbnail and thumbnail.filename:
+                    raw = thumbnail.read(2 * 1024 * 1024 + 1)
+                    if len(raw) > 2 * 1024 * 1024:
+                        raise ValueError("Thumbnail باید حداکثر 2MB باشد.")
+                    mime = (thumbnail.mimetype or "").lower()
+                    if mime not in {"image/jpeg", "image/png"}:
+                        raise ValueError("Thumbnail فقط JPEG یا PNG باشد.")
+                    ext = ".png" if mime == "image/png" else ".jpg"
+                    asset_dir = DATA_DIR / "long_assets" / f"job-{job.id}"
+                    asset_dir.mkdir(parents=True, exist_ok=True)
+                    path = asset_dir / f"thumbnail{ext}"
+                    path.write_bytes(raw)
+                    path.chmod(0o600)
+                    thumbnail_path = str(path)
+
+                configure_long_job(
+                    job.id,
+                    quality=quality,
+                    tags=tags,
+                    category_id=category_id,
+                    made_for_kids=made_for_kids,
+                    embeddable=embeddable,
+                    license_name=license_name,
+                    notify_subscribers=notify_subscribers,
+                    default_language=default_language,
+                    audio_language=audio_language,
+                    thumbnail_path=thumbnail_path,
+                )
+
+                if publish_mode == "manual":
+                    scheduled_utc = local_datetime_to_utc(
+                        channel_id,
+                        request.form.get("scheduled_at", ""),
+                    )
+                    schedule = schedule_job_manual(job.id, scheduled_utc)
+                    local_time = utc_to_channel_local(channel_id, schedule.scheduled_for)
+                    prepare_long_job_for_schedule(job.id)
+                    _audit(
+                        "panel",
+                        "long_video_prepare_scheduled",
+                        f"job_id={job.id}; channel_id={channel_id}; scheduled_for={schedule.scheduled_for.isoformat()}",
+                    )
+                    flash(
+                        f"Long Job #{job.id} ثبت شد؛ دانلود، Private Upload و Copyright Check از همین الان شروع می‌شود و انتشار برای {local_time:%Y-%m-%d %H:%M} است.",
+                        "success",
+                    )
+                    return redirect(url_for("jobs"))
+
+                enqueue_job(job.id)
+                _audit("panel", "long_video_immediate", f"job_id={job.id}; channel_id={channel_id}")
+                flash(
+                    f"Long Job #{job.id} وارد Pipeline شد: دانلود Max Quality → Private → Check → انتشار.",
+                    "success",
+                )
+                return redirect(url_for("jobs"))
+            except Exception as exc:
+                if job is not None:
+                    mark_job_failed(job.id, f"Long video setup failed: {exc}")
+                flash(f"ثبت Long Video ناموفق بود: {exc}", "danger")
+
+    return render_template(
+        "long_videos.html",
+        channels=channels_list,
+        channel_configs=channel_configs,
+        authorization=authorization,
+    )
+
+
 @app.route("/upload", methods=["GET", "POST"])
 @login_required
 def upload():
@@ -1245,7 +1404,11 @@ def jobs():
     status = request.args.get("status", "").strip()
     with SessionLocal() as db:
         query = db.query(UploadJob)
-        if status in {"queued", "scheduled", "cancelled", "downloading", "uploading", "completed", "failed"}:
+        if status in {
+            "queued", "scheduled", "ready_scheduled", "cancelled", "downloading",
+            "uploading", "checking", "completed", "failed", "reauth_required",
+            "copyright_blocked", "preflight_blocked",
+        }:
             query = query.filter(UploadJob.status == status)
         rows = query.order_by(UploadJob.id.desc()).limit(Config.MAX_UPLOAD_HISTORY).all()
         channel_map = {c.id: c for c in db.query(YouTubeChannel).all()}
