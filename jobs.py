@@ -604,9 +604,17 @@ def resume_reauth_job(job_id: int) -> dict:
         job = db.get(UploadJob, job_id)
         if not job:
             return {"success": False, "job_id": job_id, "error": "Upload job not found"}
+        option = db.get(UploadJobOption, job_id)
+        schedule = db.query(UploadSchedule).filter_by(job_id=job_id).one_or_none()
         channel_id = job.channel_id
         video_id = job.video_id
         privacy = job.privacy
+        is_long = bool(option and option.content_type == "long")
+        schedule_is_future = bool(
+            schedule
+            and schedule.scheduled_for > datetime.utcnow()
+            and schedule.status in {"waiting", "reauth_required"}
+        )
 
     capability = publishing_preflight_capability(channel_id)
     if not capability.get("ok"):
@@ -616,6 +624,64 @@ def resume_reauth_job(job_id: int) -> dict:
             "job_id": job_id,
             "error": "YouTube management permission is still missing.",
         }
+
+    if is_long:
+        if not video_id:
+            if schedule_is_future:
+                with SessionLocal() as db:
+                    row = db.query(UploadSchedule).filter_by(job_id=job_id).one_or_none()
+                    if row and row.status == "reauth_required":
+                        row.status = "waiting"
+                        db.commit()
+                return _process_long_job(job_id, hold_after_check=True)
+            return _process_long_job(job_id, hold_after_check=False)
+
+        if schedule_is_future:
+            try:
+                with SessionLocal() as db:
+                    job = db.get(UploadJob, job_id)
+                    row = db.query(UploadSchedule).filter_by(job_id=job_id).one_or_none()
+                    if job:
+                        job.status = "checking"
+                        job.error = None
+                    if row and row.status == "reauth_required":
+                        row.status = "waiting"
+                    db.commit()
+
+                _send_telegram_job_event(job_id, event="checking")
+                check = wait_for_video_preflight(channel_id, video_id)
+                if not check.get("ok"):
+                    return _mark_preflight_blocked(job_id, channel_id, video_id, check)
+
+                with SessionLocal() as db:
+                    job = db.get(UploadJob, job_id)
+                    option = db.get(UploadJobOption, job_id)
+                    if job:
+                        job.status = "ready_scheduled"
+                        job.error = None
+                    if option:
+                        option.checked_at = datetime.utcnow()
+                    db.commit()
+                _cleanup_long_asset(job_id)
+                _send_telegram_job_event(job_id, event="ready_scheduled")
+                return {
+                    "success": True,
+                    "prepared": True,
+                    "job_id": job_id,
+                    "video_id": video_id,
+                    "video_url": f"https://youtube.com/watch?v={video_id}",
+                }
+            except Exception as exc:
+                logger.exception("Could not resume scheduled long Job %s", job_id)
+                with SessionLocal() as db:
+                    job = db.get(UploadJob, job_id)
+                    if job:
+                        job.status = "reauth_required"
+                        job.error = str(exc)[:4000]
+                        db.commit()
+                return {"success": False, "job_id": job_id, "error": str(exc)}
+
+        return finalize_prepared_long_job(job_id)
 
     if not video_id:
         with SessionLocal() as db:
