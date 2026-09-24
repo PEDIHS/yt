@@ -98,6 +98,39 @@
   </article>
 </section>
 
+<section class="network-health-strip">
+  <article class="glass-card"><span><i data-lucide="calendar-range"></i>Queue</span><strong>{{ operational.scheduled }}</strong><small>در انتظار انتشار</small></article>
+  <article class="glass-card"><span><i data-lucide="loader-circle"></i>Pipeline</span><strong>{{ operational.inflight }}</strong><small>در حال پردازش</small></article>
+  <article class="glass-card"><span><i data-lucide="shield-check"></i>Ready</span><strong>{{ operational.ready }}</strong><small>Private + Preflight پاس‌شده</small></article>
+  <article class="glass-card"><span><i data-lucide="copyright"></i>Copyright</span><strong>{{ operational.copyright_blocked }}</strong><small>Block شده و از صف خارج</small></article>
+  <article class="glass-card"><span><i data-lucide="key-round"></i>OAuth</span><strong>{{ operational.reauth_required }}</strong><small>نیازمند Reconnect</small></article>
+</section>
+
+<section class="section-block">
+  <div class="section-title-row">
+    <div><span class="section-kicker">CHANNEL RANKING</span><h2>رتبه‌بندی کانال‌ها</h2><p>رتبه بر اساس Views واقعی در بازه {{ selected_days }} روزه؛ Likes و رشد Subscriber برای مقایسه کنار آن نمایش داده می‌شود.</p></div>
+    <a class="btn btn-soft" href="{{ url_for('channels') }}"><i data-lucide="radio-tower"></i> مدیریت کانال‌ها</a>
+  </div>
+  <div class="glass-card network-ranking">
+    {% for item in channel_ranking %}
+    <a class="network-ranking-row" href="{{ url_for('channel_detail', channel_id=item.channel.id, days=selected_days) }}">
+      <span class="ranking-position {% if item.rank <= 3 %}top{% endif %}">{{ item.rank }}</span>
+      <span class="ranking-channel">
+        {% if item.channel.thumbnail_url %}<img src="{{ item.channel.thumbnail_url }}" alt="{{ item.channel.title }}">{% else %}<span class="avatar">YT</span>{% endif %}
+        <span><strong>{{ item.channel.label }}</strong><small>{{ item.channel.title }}</small></span>
+      </span>
+      <span><small>Views</small><strong>{{ compact_number(item.views) }}</strong></span>
+      <span><small>Likes</small><strong>{{ compact_number(item.likes) }}</strong></span>
+      <span><small>Comments</small><strong>{{ compact_number(item.comments) }}</strong></span>
+      <span><small>Net Subs</small><strong class="{% if item.subscribers_net < 0 %}negative{% else %}positive{% endif %}">{% if item.subscribers_net > 0 %}+{% endif %}{{ compact_number(item.subscribers_net) }}</strong></span>
+      <span class="ranking-open"><i data-lucide="chevron-left"></i></span>
+    </a>
+    {% else %}
+    <div class="table-empty">داده‌ای برای رتبه‌بندی وجود ندارد.</div>
+    {% endfor %}
+  </div>
+</section>
+
 <section class="analytics-layout">
   <article class="glass-card chart-card chart-card-main">
     <div class="card-heading">
