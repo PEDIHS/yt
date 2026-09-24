@@ -13,6 +13,7 @@ from config import Config
 from db import SessionLocal, init_db
 from jobs import enqueue_job, process_job
 from models import ChannelPublishingConfig, UploadJob, UploadSchedule, YouTubeChannel
+from missions import dispatch_due_mission_reports
 from youtube import list_channel_videos
 
 logger = logging.getLogger("publishing")
@@ -633,6 +634,10 @@ def run_scheduler() -> None:
             due_ids = _mark_due_for_release()
             for job_id in due_ids:
                 _scheduler_executor.submit(_process_scheduled_job, job_id)
+
+            mission_reports = dispatch_due_mission_reports()
+            if mission_reports:
+                logger.info("Sent %s midnight monetization mission reports", mission_reports)
 
             now = _utcnow()
             if now - last_analysis_scan >= timedelta(minutes=30):
