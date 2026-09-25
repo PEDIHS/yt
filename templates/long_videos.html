@@ -2,7 +2,7 @@
 {% block title %}Long Video Studio | YT Studio{% endblock %}
 {% block eyebrow %}LONG-FORM PUBLISHING PIPELINE{% endblock %}
 {% block heading %}Long Video Studio{% endblock %}
-{% block subheading %}دانلود از لینک، آماده‌سازی با بالاترین کیفیت، Thumbnail و Metadata کامل، Copyright Preflight و انتشار زمان‌بندی‌شده{% endblock %}
+{% block subheading %}لینک ویدیو از هر سایت عمومی را بده؛ تشخیص خودکار منبع، بهترین کیفیت، Thumbnail و Metadata، Copyright Preflight و انتشار زمان‌بندی‌شده{% endblock %}
 
 {% block content %}
 {% include "_channel_workspace_nav.html" %}
@@ -12,7 +12,7 @@
     <div>
       <span class="section-kicker">DOWNLOAD → PREPARE → CHECK → PUBLISH</span>
       <h2>استودیوی ویدیوهای طولانی</h2>
-      <p>لینک عمومی ویدیو را بده؛ سیستم بهترین Video + Audio را دانلود و Merge می‌کند، ویدیو را Private روی YouTube آماده می‌کند، Thumbnail و Metadata را اعمال می‌کند و قبل از انتشار بررسی YouTube را پاس می‌کند.</p>
+      <p>لینک هر صفحه ویدیویی عمومی را بده؛ سیستم منبع را هوشمند تشخیص می‌دهد، Extractor اختصاصی یا Generic را امتحان می‌کند و در صورت نیاز ویدیوی Embed/Direct داخل صفحه را پیدا می‌کند و بهترین Video + Audio را آماده می‌کند.</p>
     </div>
   </div>
   <div class="long-pipeline">
@@ -33,7 +33,7 @@
   <div class="long-studio-main">
     <section class="glass-card long-section">
       <div class="long-section-head">
-        <div><span class="section-kicker">SOURCE INSPECTOR</span><h2>منبع دانلود</h2><p>لینک مستقیم یا صفحه ویدیویی عمومی؛ Playlist دانلود نمی‌شود.</p></div>
+        <div><span class="section-kicker">SMART SOURCE INSPECTOR</span><h2>لینک ویدیو از هر پلتفرم</h2><p>لینک صفحه ویدیو، لینک مستقیم فایل یا Stream عمومی را بده؛ Playlist دانلود نمی‌شود.</p></div>
         <i data-lucide="link-2"></i>
       </div>
       <div class="long-source-row">
@@ -41,6 +41,16 @@
           <input id="longSourceUrl" name="source_url" type="url" placeholder="https://..." required autocomplete="off">
         </label>
         <button class="btn btn-soft long-probe-btn" type="button" id="probeLongVideo"><i data-lucide="scan-search"></i> آنالیز لینک</button>
+      </div>
+      <div class="long-source-capabilities">
+        <span><i data-lucide="youtube"></i>YouTube</span>
+        <span><i data-lucide="instagram"></i>Instagram</span>
+        <span><i data-lucide="music-2"></i>TikTok</span>
+        <span><i data-lucide="twitter"></i>X / Twitter</span>
+        <span><i data-lucide="facebook"></i>Facebook</span>
+        <span><i data-lucide="play"></i>Vimeo / Twitch / Dailymotion</span>
+        <span><i data-lucide="globe-2"></i>Generic Web / Embed</span>
+        <span><i data-lucide="file-video-2"></i>MP4 / WebM / HLS</span>
       </div>
       <div class="long-source-status" id="longSourceStatus" hidden></div>
       <div class="long-source-preview" id="longSourcePreview" hidden>
@@ -52,6 +62,7 @@
             <span><i data-lucide="clock-3"></i><b id="longSourceDuration">—</b></span>
             <span><i data-lucide="monitor"></i><b id="longSourceResolution">—</b></span>
             <span><i data-lucide="user-round"></i><b id="longSourceUploader">—</b></span>
+            <span><i data-lucide="route"></i><b id="longSourceStrategy">Auto</b></span>
           </div>
         </div>
       </div>
@@ -260,7 +271,9 @@
       document.getElementById('longSourceDuration').textContent = duration(data.duration);
       document.getElementById('longSourceResolution').textContent = data.width && data.height ? data.width + '×' + data.height : 'Auto Max';
       document.getElementById('longSourceUploader').textContent = data.uploader || '—';
-      document.getElementById('longSourceExtractor').textContent = (data.extractor || 'MEDIA SOURCE').toUpperCase();
+      const strategyNames = {extractor:'Smart Extractor',direct:'Direct Media',embedded:'Embedded Player','embedded-direct':'Embedded Direct'};
+      document.getElementById('longSourceStrategy').textContent = strategyNames[data.strategy] || 'Smart Auto';
+      document.getElementById('longSourceExtractor').textContent = (data.extractor || 'GENERIC WEB').toUpperCase();
       const img = document.getElementById('longSourceThumb');
       if (data.thumbnail) { img.src = data.thumbnail; img.style.display = ''; } else { img.style.display = 'none'; }
       preview.hidden = false;
