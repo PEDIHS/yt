@@ -35,6 +35,8 @@ INSTAGRAM_URL_RE = re.compile(
     r"https?://(?:www\.)?instagram\.com/(?:reel|reels|p)/[A-Za-z0-9_-]+/?",
     re.I,
 )
+HASHTAG_RE = re.compile(r"(?<![\w#])#([\w\u200c]+)", re.UNICODE)
+URL_RE = re.compile(r"https?://\S+", re.I)
 
 
 def _cookies() -> dict[str, str]:
@@ -280,6 +282,43 @@ def _find_media_node(value: Any) -> dict | None:
     return None
 
 
+def _caption_metadata(caption_text: str, fallback_title: str) -> dict[str, Any]:
+    caption_text = str(caption_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+    tags: list[str] = []
+    seen: set[str] = set()
+    for match in HASHTAG_RE.finditer(caption_text):
+        tag = match.group(1).strip("_")
+        if not tag:
+            continue
+        key = tag.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        tags.append(tag)
+        if len(tags) >= 80:
+            break
+
+    first_meaningful = ""
+    for raw_line in caption_text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = URL_RE.sub("", line)
+        line = HASHTAG_RE.sub("", line)
+        line = re.sub(r"\s+", " ", line).strip(" \t-–—|•·.,،؛;:")
+        if line:
+            first_meaningful = line
+            break
+
+    return {
+        "title": (first_meaningful or fallback_title).strip()[:180],
+        "description": first_meaningful[:1000],
+        "hashtags": " ".join(f"#{tag}" for tag in tags),
+        "tags": tags,
+    }
+
+
 def extract_shared_media(item: dict) -> dict | None:
     item_type = str(item.get("item_type") or item.get("type") or "").lower()
     plausible = {
@@ -293,51 +332,76 @@ def extract_shared_media(item: dict) -> dict | None:
     if item_type and item_type not in plausible:
         return None
 
-    for text in _walk_strings(item):
-        match = INSTAGRAM_URL_RE.search(text)
-        if match:
-            url = match.group(0)
-            media_type = "reel" if "/reel" in url else "post"
+    node = _find_media_node(item)
+    if node:
+        code = str(node.get("code") or "").strip()
+        if code:
+            product_type = str(node.get("product_type") or "").lower()
+            is_reel = product_type == "clips" or bool(node.get("clips_metadata"))
+            media_type = "reel" if is_reel else "post"
+            path = "reel" if is_reel else "p"
+            url = f"https://www.instagram.com/{path}/{code}/"
+
+            caption = node.get("caption")
+            if isinstance(caption, dict):
+                caption_text = str(caption.get("text") or "").strip()
+            else:
+                caption_text = ""
+            fallback_title = "Instagram Reel" if is_reel else "Instagram Post"
+            caption_meta = _caption_metadata(caption_text, fallback_title)
+
+            thumbnail_url = ""
+            versions = ((node.get("image_versions2") or {}).get("candidates") or [])
+            if versions and isinstance(versions[0], dict):
+                thumbnail_url = str(versions[0].get("url") or "")
+
             return {
                 "url": url,
                 "media_type": media_type,
-                "title": "Instagram Reel" if media_type == "reel" else "Instagram Post",
-                "thumbnail_url": "",
+                "thumbnail_url": thumbnail_url,
+                **caption_meta,
             }
 
-    node = _find_media_node(item)
-    if not node:
-        return None
+    for text_value in _walk_strings(item):
+        match = INSTAGRAM_URL_RE.search(text_value)
+        if match:
+            url = match.group(0)
+            media_type = "reel" if "/reel" in url else "post"
+            fallback_title = "Instagram Reel" if media_type == "reel" else "Instagram Post"
+            return {
+                "url": url,
+                "media_type": media_type,
+                "title": fallback_title,
+                "description": "",
+                "hashtags": "",
+                "tags": [],
+                "thumbnail_url": "",
+            }
+    return None
 
-    code = str(node.get("code") or "").strip()
-    if not code:
-        return None
-    product_type = str(node.get("product_type") or "").lower()
-    is_reel = product_type == "clips" or bool(node.get("clips_metadata"))
-    media_type = "reel" if is_reel else "post"
-    path = "reel" if is_reel else "p"
-    url = f"https://www.instagram.com/{path}/{code}/"
 
-    caption = node.get("caption")
-    if isinstance(caption, dict):
-        caption_text = str(caption.get("text") or "").strip()
-    else:
-        caption_text = ""
-    first_line = re.sub(r"\s+", " ", caption_text).strip()
-    title = first_line[:180] if first_line else ("Instagram Reel" if is_reel else "Instagram Post")
-
-    thumbnail_url = ""
-    versions = ((node.get("image_versions2") or {}).get("candidates") or [])
-    if versions and isinstance(versions[0], dict):
-        thumbnail_url = str(versions[0].get("url") or "")
-
+def share_upload_metadata(share: InstagramDirectShare) -> dict[str, Any]:
+    fallback_title = share.title_hint or (
+        "Instagram Reel" if share.media_type == "reel" else "Instagram Post"
+    )
+    try:
+        item = json.loads(share.raw_json or "{}")
+    except Exception:
+        item = {}
+    media = extract_shared_media(item) if isinstance(item, dict) else None
+    if not media:
+        return {
+            "title": fallback_title[:180],
+            "description": "",
+            "hashtags": "",
+            "tags": [],
+        }
     return {
-        "url": url,
-        "media_type": media_type,
-        "title": title,
-        "thumbnail_url": thumbnail_url,
+        "title": str(media.get("title") or fallback_title)[:180],
+        "description": str(media.get("description") or "")[:1000],
+        "hashtags": str(media.get("hashtags") or "")[:4000],
+        "tags": list(media.get("tags") or [])[:80],
     }
-
 
 def _sender_for_item(thread: dict, item: dict) -> tuple[str, str]:
     sender_id = str(item.get("user_id") or item.get("sender_id") or "")
@@ -589,9 +653,10 @@ def _auto_queue_share(share_id: int) -> bool:
 
         share = db.get(InstagramDirectShare, share_id)
         source_url = share.media_url
-        title = (share.title_hint or (
-            "Instagram Reel" if share.media_type == "reel" else "Instagram Post"
-        ))[:255]
+        metadata = share_upload_metadata(share)
+        title = metadata["title"][:255]
+        description = metadata["description"]
+        hashtags = metadata["hashtags"]
 
     job = None
     try:
@@ -600,6 +665,8 @@ def _auto_queue_share(share_id: int) -> bool:
             source_url=source_url,
             title=title,
             source="instagram-group",
+            description=description,
+            hashtags=hashtags,
         )
         with SessionLocal() as db:
             share = db.get(InstagramDirectShare, share_id)
