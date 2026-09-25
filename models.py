@@ -204,6 +204,28 @@ class UploadSchedule(Base):
     released_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
+
+
+class InstagramDirectGroupRoute(Base):
+    __tablename__ = "instagram_direct_group_routes"
+
+    thread_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    thread_title: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    member_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    members_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+
+    channel_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("youtube_channels.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    discovered_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    last_routed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    routed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
 class InstagramDirectShare(Base):
     __tablename__ = "instagram_direct_shares"
 
