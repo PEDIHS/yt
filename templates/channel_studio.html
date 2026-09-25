@@ -1,0 +1,303 @@
+{% extends "base.html" %}
+{% block title %}Channel Studio · {{ channel.label }}{% endblock %}
+{% block eyebrow %}YouTube Studio Controls{% endblock %}
+{% block heading %}Channel Studio{% endblock %}
+{% block subheading %}Branding، About، Home Layout و تنظیمات قابل مدیریت از YouTube API{% endblock %}
+
+{% block content %}
+<section class="studio-hero glass-card">
+  <div class="studio-hero-copy">
+    <div class="studio-avatar-wrap">
+      {% if studio.thumbnail_url %}<img src="{{ studio.thumbnail_url }}" alt="{{ studio.title }}">{% else %}<div class="avatar avatar-xl">YT</div>{% endif %}
+      <span class="studio-live-dot"></span>
+    </div>
+    <div class="grow">
+      <span class="section-kicker">CHANNEL CUSTOMIZATION</span>
+      <h2>{{ studio.title or channel.title }}</h2>
+      <p>{{ studio.custom_url or channel.youtube_channel_id }}</p>
+      <div class="studio-status-chips">
+        <span class="data-chip chip-success"><i data-lucide="shield-check"></i> OAuth connected</span>
+        <span class="data-chip"><i data-lucide="globe-2"></i> {{ studio.country or 'No country' }}</span>
+        <span class="data-chip"><i data-lucide="languages"></i> {{ studio.default_language or 'No default language' }}</span>
+      </div>
+    </div>
+  </div>
+  <div class="studio-hero-actions">
+    <a class="btn btn-primary" href="https://studio.youtube.com/channel/{{ channel.youtube_channel_id }}" target="_blank" rel="noopener"><i data-lucide="external-link"></i> Open YouTube Studio</a>
+    <a class="btn btn-soft" href="https://www.youtube.com/channel/{{ channel.youtube_channel_id }}" target="_blank" rel="noopener"><i data-lucide="eye"></i> View Channel</a>
+  </div>
+</section>
+
+{% set workspace_channel = channel %}
+{% include "_channel_workspace_nav.html" %}
+
+{% if page_errors %}
+<section class="notice-card notice-danger">
+  <div class="notice-icon"><i data-lucide="triangle-alert"></i></div>
+  <div class="grow"><strong>بعضی اطلاعات Studio کامل لود نشد</strong><p>{% for key,error in page_errors.items() %}{{ key }}: {{ error }}{% if not loop.last %} · {% endif %}{% endfor %}</p></div>
+</section>
+{% endif %}
+
+<section class="studio-cap-grid">
+  <article class="studio-cap-card glass-card editable">
+    <span class="studio-cap-icon"><i data-lucide="wand-sparkles"></i></span>
+    <div><small>API EDITABLE</small><strong>Branding & About</strong><p>بنر، توضیحات، Keywords، کشور، زبان و Trailer</p></div>
+  </article>
+  <article class="studio-cap-card glass-card editable">
+    <span class="studio-cap-icon"><i data-lucide="panels-top-left"></i></span>
+    <div><small>API EDITABLE</small><strong>Home Layout</strong><p>ساخت، ویرایش، ترتیب و حذف Shelfهای صفحه Home</p></div>
+  </article>
+  <article class="studio-cap-card glass-card editable">
+    <span class="studio-cap-icon"><i data-lucide="badge-check"></i></span>
+    <div><small>API EDITABLE</small><strong>Watermark</strong><p>لوگوی روی ویدیوها، زمان نمایش و مقصد کلیک</p></div>
+  </article>
+  <article class="studio-cap-card glass-card studio-only">
+    <span class="studio-cap-icon"><i data-lucide="lock-keyhole"></i></span>
+    <div><small>YOUTUBE STUDIO ONLY</small><strong>Name / Handle / Avatar</strong><p>API عمومی برای تغییر مستقیم این سه مورد وجود ندارد</p></div>
+  </article>
+</section>
+
+<section class="studio-layout-grid">
+  <div class="studio-main-column">
+    <article class="glass-card studio-card" id="about-branding">
+      <div class="studio-card-head">
+        <div><span class="section-kicker">ABOUT & METADATA</span><h2>اطلاعات کانال</h2><p>این تغییرات مستقیماً روی YouTube اعمال می‌شوند.</p></div>
+        <span class="studio-card-badge"><i data-lucide="cloud-upload"></i> Live API</span>
+      </div>
+      <form method="post" action="{{ url_for('channel_studio_branding', channel_id=channel.id) }}" class="studio-form-grid">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="span-2">About / Description
+          <textarea name="description" rows="6" maxlength="1000" placeholder="توضیحات کانال...">{{ studio.description }}</textarea>
+          <span class="field-hint">متن About عمومی کانال</span>
+        </label>
+        <label class="span-2">Channel Keywords
+          <input name="keywords" value="{{ studio.keywords }}" maxlength="500" placeholder="music, iran, entertainment">
+          <span class="field-hint">کلیدواژه‌ها را با فاصله یا ویرگول جدا کن</span>
+        </label>
+        <label>Country
+          <input name="country" value="{{ studio.country }}" maxlength="2" placeholder="DE" style="text-transform:uppercase">
+        </label>
+        <label>Default language
+          <input name="default_language" value="{{ studio.default_language }}" maxlength="20" placeholder="fa">
+        </label>
+        <label>Google Analytics tracking ID
+          <input name="tracking_analytics_id" value="{{ studio.tracking_analytics_id }}" maxlength="120" placeholder="UA-... / optional">
+        </label>
+        <label>Trailer for non-subscribers
+          <select name="unsubscribed_trailer">
+            <option value="">بدون Trailer</option>
+            {% for video in recent_videos %}
+            <option value="{{ video.video_id }}" {% if studio.unsubscribed_trailer == video.video_id %}selected{% endif %}>{{ video.title[:70] }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="span-2 studio-form-actions">
+          <div class="studio-save-note"><i data-lucide="info"></i><span>ذخیره این فرم حدود 50 واحد از YouTube API quota مصرف می‌کند.</span></div>
+          <button class="btn btn-primary"><i data-lucide="save"></i> ذخیره روی YouTube</button>
+        </div>
+      </form>
+    </article>
+
+    <article class="glass-card studio-card" id="home-layout">
+      <div class="studio-card-head">
+        <div><span class="section-kicker">HOME LAYOUT</span><h2>بخش‌های صفحه Home</h2><p>حداکثر ۱۰ Shelf؛ ترتیب بر اساس Position از صفر شروع می‌شود.</p></div>
+        <span class="data-chip"><i data-lucide="layers-3"></i>{{ sections|length }}/10</span>
+      </div>
+
+      <div class="studio-section-list">
+        {% for section in sections %}
+        <form method="post" action="{{ url_for('channel_studio_section_update', channel_id=channel.id, section_id=section.id) }}" class="studio-section-item">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="studio-section-index">{{ section.position + 1 }}</div>
+          <div class="studio-section-fields">
+            <label>نوع
+              <select name="section_type">
+                {% for value,label in section_types %}<option value="{{ value }}" {% if section.type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>عنوان
+              <input name="section_title" value="{{ section.title }}" maxlength="100" placeholder="برای چند پلی‌لیست / چند چنل">
+            </label>
+            <label>Position
+              <input name="position" type="number" min="0" max="9" value="{{ section.position }}">
+            </label>
+            <label class="span-2">Playlist IDs
+              <input name="playlist_ids" value="{{ section.playlists|join(', ') }}" placeholder="PL... , PL...">
+            </label>
+            <label class="span-2">Channel IDs
+              <input name="channel_ids" value="{{ section.channels|join(', ') }}" placeholder="UC... , UC...">
+            </label>
+          </div>
+          <div class="studio-section-actions">
+            <button class="btn btn-soft"><i data-lucide="save"></i> ذخیره</button>
+            <button class="btn btn-danger" formaction="{{ url_for('channel_studio_section_delete', channel_id=channel.id, section_id=section.id) }}" onclick="return confirm('این بخش از Home یوتیوب حذف شود؟')"><i data-lucide="trash-2"></i></button>
+          </div>
+        </form>
+        {% else %}
+        <div class="studio-empty"><i data-lucide="panels-top-left"></i><strong>هنوز Shelf قابل‌مدیریتی پیدا نشد</strong><span>از فرم پایین اولین بخش را بساز.</span></div>
+        {% endfor %}
+      </div>
+
+      <details class="studio-create-section">
+        <summary><span><i data-lucide="plus-circle"></i> افزودن بخش جدید به Home</span><i data-lucide="chevron-down"></i></summary>
+        <form method="post" action="{{ url_for('channel_studio_section_create', channel_id=channel.id) }}" class="studio-form-grid" data-section-form>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label>نوع بخش
+            <select name="section_type" data-section-type>
+              {% for value,label in section_types %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+            </select>
+          </label>
+          <label>Position
+            <input type="number" name="position" min="0" max="9" value="{{ sections|length }}">
+          </label>
+          <label class="span-2" data-section-title-wrap>عنوان
+            <input name="section_title" maxlength="100" placeholder="مثلاً پلی‌لیست‌های منتخب">
+          </label>
+          <div class="span-2 studio-playlist-picker" data-playlist-wrap>
+            <span class="field-label">پلی‌لیست‌های کانال</span>
+            <div class="studio-check-grid">
+              {% for playlist in playlists %}
+              <label class="studio-check-item"><input type="checkbox" name="playlist_ids" value="{{ playlist.playlist_id }}"><span><strong>{{ playlist.title }}</strong><small>{{ playlist.item_count }} ویدیو · {{ playlist.privacy }}</small></span></label>
+              {% else %}<span class="field-hint">پلی‌لیستی پیدا نشد.</span>{% endfor %}
+            </div>
+            <input name="playlist_ids_manual" placeholder="یا Playlist ID را دستی وارد کن">
+          </div>
+          <label class="span-2" data-channel-wrap>Channel IDs
+            <textarea name="channel_ids" rows="3" placeholder="UCxxxx, UCyyyy"></textarea>
+          </label>
+          <div class="span-2 studio-form-actions"><span class="field-hint">بعضی نوع‌ها مثل Recent Uploads نیازی به ID ندارند.</span><button class="btn btn-primary"><i data-lucide="plus"></i> ساخت بخش</button></div>
+        </form>
+      </details>
+    </article>
+
+    <article class="glass-card studio-card" id="localizations">
+      <div class="studio-card-head">
+        <div><span class="section-kicker">LOCALIZATIONS</span><h2>عنوان و About چندزبانه</h2><p>برای زبان‌های مختلف عنوان و توضیحات جدا تعریف کن.</p></div>
+        <span class="data-chip"><i data-lucide="languages"></i>{{ studio.localizations|length }}</span>
+      </div>
+      {% if not studio.default_language %}
+      <div class="studio-inline-warning"><i data-lucide="triangle-alert"></i><span>برای Localizations اول در بخش بالا Default language را مشخص و ذخیره کن.</span></div>
+      {% endif %}
+      <div class="studio-localization-list">
+        {% for lang,data in studio.localizations.items() %}
+        <article>
+          <div><strong>{{ lang }}</strong><span>{{ data.title }}</span><small>{{ data.description[:150] }}{% if data.description|length > 150 %}…{% endif %}</small></div>
+          <form method="post" action="{{ url_for('channel_studio_localization_delete', channel_id=channel.id) }}" onsubmit="return confirm('ترجمه {{ lang }} حذف شود؟')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="language" value="{{ lang }}"><button class="icon-btn" aria-label="حذف"><i data-lucide="trash-2"></i></button>
+          </form>
+        </article>
+        {% else %}<div class="studio-empty compact"><i data-lucide="languages"></i><span>ترجمه‌ای ثبت نشده.</span></div>{% endfor %}
+      </div>
+      <form method="post" action="{{ url_for('channel_studio_localization', channel_id=channel.id) }}" class="studio-form-grid studio-localization-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>Language code<input name="language" placeholder="en" required></label>
+        <label>Localized title<input name="localized_title" maxlength="100" required placeholder="Channel title"></label>
+        <label class="span-2">Localized About<textarea name="localized_description" rows="4" maxlength="1000"></textarea></label>
+        <div class="span-2 studio-form-actions"><span class="field-hint">ثبت دوباره یک کد زبان، همان ترجمه را بروزرسانی می‌کند.</span><button class="btn btn-primary"><i data-lucide="languages"></i> ذخیره ترجمه</button></div>
+      </form>
+    </article>
+  </div>
+
+  <aside class="studio-side-column">
+    <article class="glass-card studio-card studio-branding-card">
+      <div class="studio-card-head compact"><div><span class="section-kicker">BRANDING</span><h2>بنر کانال</h2></div></div>
+      <div class="studio-banner-preview" data-banner-preview>
+        {% if studio.banner_url %}<img src="{{ studio.banner_url }}" alt="Channel banner">{% else %}<div><i data-lucide="image"></i><span>بنر فعلی از API در دسترس نیست</span></div>{% endif %}
+        <span class="studio-safe-area">SAFE AREA</span>
+      </div>
+      <form method="post" enctype="multipart/form-data" action="{{ url_for('channel_studio_banner', channel_id=channel.id) }}" class="studio-upload-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="studio-file-drop"><input type="file" name="banner" accept="image/png,image/jpeg" required data-banner-input><i data-lucide="upload-cloud"></i><strong>انتخاب بنر جدید</strong><span>PNG/JPG · حداقل 2048×1152 · نسبت 16:9 · حداکثر 6MB</span></label>
+        <button class="btn btn-primary wide"><i data-lucide="image-up"></i> Upload & Apply</button>
+      </form>
+    </article>
+
+    <article class="glass-card studio-card">
+      <div class="studio-card-head compact"><div><span class="section-kicker">VIDEO WATERMARK</span><h2>لوگوی روی ویدیو</h2></div></div>
+      <form method="post" enctype="multipart/form-data" action="{{ url_for('channel_studio_watermark', channel_id=channel.id) }}" class="studio-form-grid one">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="studio-file-drop"><input type="file" name="watermark" accept="image/png,image/jpeg" required><i data-lucide="badge"></i><strong>انتخاب Watermark</strong><span>PNG/JPG · حداکثر 10MB</span></label>
+        <label>زمان‌بندی
+          <select name="timing_type"><option value="offsetFromStart">از ابتدای ویدیو</option><option value="offsetFromEnd">از انتهای ویدیو</option></select>
+        </label>
+        <div class="studio-mini-grid">
+          <label>Offset (ثانیه)<input type="number" min="0" step="1" name="offset_seconds" value="0"></label>
+          <label>Duration (اختیاری)<input type="number" min="1" step="1" name="duration_seconds" placeholder="تا انتها"></label>
+        </div>
+        <label>Target Channel ID<input name="target_channel_id" placeholder="{{ channel.youtube_channel_id }}"></label>
+        <button class="btn btn-primary wide"><i data-lucide="badge-check"></i> تنظیم Watermark</button>
+      </form>
+      <form method="post" action="{{ url_for('channel_studio_watermark_remove', channel_id=channel.id) }}" onsubmit="return confirm('Watermark کانال حذف شود؟')" class="studio-remove-watermark">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-danger wide"><i data-lucide="eraser"></i> حذف Watermark</button>
+      </form>
+    </article>
+
+    <article class="glass-card studio-card studio-readonly-card" id="channel-status">
+      <div class="studio-card-head compact"><div><span class="section-kicker">CHANNEL STATUS</span><h2>وضعیت و Audience</h2></div></div>
+      <div class="studio-status-list">
+        <div><span>Privacy</span><strong>{{ studio.status.privacyStatus or '—' }}</strong></div>
+        <div><span>Long uploads</span><strong>{{ studio.status.longUploadsStatus or '—' }}</strong></div>
+        <div><span>Linked</span><strong class="{{ 'positive' if studio.status.isLinked else 'warning-text' }}">{{ 'Yes' if studio.status.isLinked else 'No' }}</strong></div>
+        <div><span>Monetization</span><strong class="{{ 'positive' if studio.status.isChannelMonetizationEnabled else '' }}">{{ 'Enabled' if studio.status.isChannelMonetizationEnabled else 'Not enabled / unavailable' }}</strong></div>
+        <div><span>Subscribers</span><strong>{{ compact_number(studio.statistics.subscriberCount) }}</strong></div>
+        <div><span>Videos</span><strong>{{ compact_number(studio.statistics.videoCount) }}</strong></div>
+      </div>
+      <form method="post" action="{{ url_for('channel_studio_audience', channel_id=channel.id) }}" class="studio-audience-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>Audience / Made for kids
+          <select name="made_for_kids" required>
+            <option value="">انتخاب کن</option>
+            <option value="yes" {% if studio.status.selfDeclaredMadeForKids is sameas true %}selected{% endif %}>بله، کانال برای کودکان ساخته شده</option>
+            <option value="no" {% if studio.status.selfDeclaredMadeForKids is sameas false %}selected{% endif %}>خیر، کانال برای کودکان ساخته نشده</option>
+          </select>
+        </label>
+        <button class="btn btn-soft wide"><i data-lucide="baby"></i> ذخیره Audience</button>
+      </form>
+    </article>
+
+    <article class="glass-card studio-card studio-only-card">
+      <div class="studio-card-head compact"><div><span class="section-kicker">STUDIO-ONLY SETTINGS</span><h2>موارد خارج از API</h2></div></div>
+      <div class="studio-locked-list">
+        <div><i data-lucide="user-round"></i><span><strong>Channel name</strong><small>تغییر نام از YouTube Studio</small></span><i data-lucide="lock-keyhole"></i></div>
+        <div><i data-lucide="at-sign"></i><span><strong>@Handle</strong><small>API عمومی قابل ویرایش ندارد</small></span><i data-lucide="lock-keyhole"></i></div>
+        <div><i data-lucide="circle-user-round"></i><span><strong>Profile picture</strong><small>آپلود Avatar فقط از YouTube Studio</small></span><i data-lucide="lock-keyhole"></i></div>
+        <div><i data-lucide="link-2"></i><span><strong>Profile links</strong><small>از Customization داخل Studio</small></span><i data-lucide="lock-keyhole"></i></div>
+      </div>
+      <a class="btn btn-soft wide" href="https://studio.youtube.com/channel/{{ channel.youtube_channel_id }}" target="_blank" rel="noopener"><i data-lucide="external-link"></i> باز کردن YouTube Studio</a>
+    </article>
+  </aside>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const bannerInput = document.querySelector('[data-banner-input]');
+  const preview = document.querySelector('[data-banner-preview]');
+  if (bannerInput && preview) {
+    bannerInput.addEventListener('change', () => {
+      const file = bannerInput.files && bannerInput.files[0];
+      if (!file) return;
+      const url = URL.createObjectURL(file);
+      preview.innerHTML = '<img alt="Banner preview"><span class="studio-safe-area">SAFE AREA</span>';
+      preview.querySelector('img').src = url;
+    });
+  }
+  const form = document.querySelector('[data-section-form]');
+  if (form) {
+    const type = form.querySelector('[data-section-type]');
+    const titleWrap = form.querySelector('[data-section-title-wrap]');
+    const playlistWrap = form.querySelector('[data-playlist-wrap]');
+    const channelWrap = form.querySelector('[data-channel-wrap]');
+    const sync = () => {
+      const value = type.value;
+      titleWrap.hidden = !['multiplePlaylists','multipleChannels'].includes(value);
+      playlistWrap.hidden = !['singlePlaylist','multiplePlaylists'].includes(value);
+      channelWrap.hidden = value !== 'multipleChannels';
+    };
+    type.addEventListener('change', sync);
+    sync();
+  }
+})();
+</script>
+{% endblock %}
