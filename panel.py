@@ -64,23 +64,35 @@ from youtube import (
     channel_authorization_state,
     connect_channel,
     create_playlist,
+    create_channel_section,
     delete_caption,
+    delete_channel_localization,
+    delete_channel_section,
     delete_comment,
     delete_playlist,
     delete_video,
+    get_channel_studio_data,
     get_video_manager_data,
     list_channel_playlists,
+    list_channel_sections,
     list_channel_videos,
     list_video_captions,
     list_video_comments,
     moderate_comment,
     oauth_flow,
     refresh_channel,
+    remove_channel_watermark,
     reply_to_comment,
+    set_channel_watermark,
     set_video_thumbnail,
+    update_channel_audience,
+    update_channel_branding,
+    update_channel_localization,
+    update_channel_section,
     update_playlist,
     update_video_metadata,
     upload_caption,
+    upload_channel_banner,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
@@ -779,6 +791,278 @@ def channel_detail(channel_id: int):
         recent_channel_jobs=recent_channel_jobs,
         upcoming_queue=upcoming_queue,
     )
+
+
+
+def _studio_id_list(*values: str) -> list[str]:
+    result = []
+    seen = set()
+    for value in values:
+        for item in (value or "").replace("\n", ",").replace(";", ",").split(","):
+            item = item.strip()
+            if item and item not in seen:
+                seen.add(item)
+                result.append(item)
+    return result
+
+
+@app.get("/channels/<int:channel_id>/studio")
+@login_required
+def channel_studio(channel_id: int):
+    with SessionLocal() as db:
+        channel = db.get(YouTubeChannel, channel_id)
+        if not channel:
+            return "Channel not found", 404
+
+    studio = {}
+    sections = []
+    playlists = []
+    recent_videos = []
+    page_errors = {}
+    try:
+        studio = get_channel_studio_data(channel_id)
+    except Exception as exc:
+        page_errors["studio"] = str(exc)
+    try:
+        sections = list_channel_sections(channel_id)
+    except Exception as exc:
+        page_errors["sections"] = str(exc)
+    try:
+        playlists = list_channel_playlists(channel_id)
+    except Exception as exc:
+        page_errors["playlists"] = str(exc)
+    try:
+        recent_videos = list_channel_videos(channel_id, max_results=25).get("items", [])
+    except Exception as exc:
+        page_errors["videos"] = str(exc)
+    try:
+        authorization = channel_authorization_state(channel_id)
+    except Exception as exc:
+        authorization = {"manage": False, "upload": False, "force_ssl": False, "error": str(exc)}
+
+    section_types = [
+        ("recentUploads", "آخرین ویدیوها"),
+        ("popularUploads", "محبوب‌ترین ویدیوها"),
+        ("singlePlaylist", "یک پلی‌لیست"),
+        ("multiplePlaylists", "چند پلی‌لیست"),
+        ("multipleChannels", "چنل‌های پیشنهادی"),
+        ("allPlaylists", "همه پلی‌لیست‌ها"),
+        ("subscriptions", "اشتراک‌های کانال"),
+        ("liveEvents", "Liveها"),
+        ("upcomingEvents", "Liveهای آینده"),
+        ("completedEvents", "Liveهای تمام‌شده"),
+    ]
+    return render_template(
+        "channel_studio.html",
+        channel=channel,
+        studio=studio,
+        sections=sections,
+        playlists=playlists,
+        recent_videos=recent_videos,
+        authorization=authorization,
+        section_types=section_types,
+        page_errors=page_errors,
+        workspace_channel=channel,
+    )
+
+
+@app.post("/channels/<int:channel_id>/studio/branding")
+@login_required
+def channel_studio_branding(channel_id: int):
+    require_csrf()
+    try:
+        update_channel_branding(
+            channel_id,
+            description=request.form.get("description", ""),
+            keywords=request.form.get("keywords", ""),
+            country=request.form.get("country", ""),
+            default_language=request.form.get("default_language", ""),
+            tracking_analytics_id=request.form.get("tracking_analytics_id", ""),
+            unsubscribed_trailer=request.form.get("unsubscribed_trailer", ""),
+        )
+        _audit("panel", "channel_branding_updated", f"channel_id={channel_id}")
+        flash("تنظیمات About و Branding روی YouTube ذخیره شد.", "success")
+    except Exception as exc:
+        logger.exception("Channel branding update failed")
+        flash(f"ذخیره تنظیمات YouTube ناموفق بود: {exc}", "danger")
+    return redirect(url_for("channel_studio", channel_id=channel_id))
+
+
+@app.post("/channels/<int:channel_id>/studio/audience")
+@login_required
+def channel_studio_audience(channel_id: int):
+    require_csrf()
+    try:
+        value = request.form.get("made_for_kids", "")
+        if value not in {"yes", "no"}:
+            raise ValueError("یک گزینه Audience انتخاب کن")
+        update_channel_audience(channel_id, value == "yes")
+        _audit("panel", "channel_audience_updated", f"channel_id={channel_id}; made_for_kids={value}")
+        flash("تنظیم Audience کانال روی YouTube ذخیره شد.", "success")
+    except Exception as exc:
+        logger.exception("Channel audience update failed")
+        flash(f"ذخیره Audience ناموفق بود: {exc}", "danger")
+    return redirect(url_for("channel_studio", channel_id=channel_id) + "#channel-status")
+
+
+@app.post("/channels/<int:channel_id>/studio/banner")
+@login_required
+def channel_studio_banner(channel_id: int):
+    require_csrf()
+    upload = request.files.get("banner")
+    try:
+        if not upload or not upload.filename:
+            raise ValueError("فایل بنر انتخاب نشده است")
+        content = upload.read(6 * 1024 * 1024 + 1)
+        upload_channel_banner(channel_id, content, upload.mimetype or "application/octet-stream")
+        _audit("panel", "channel_banner_updated", f"channel_id={channel_id}")
+        flash("بنر کانال با موفقیت روی YouTube تغییر کرد.", "success")
+    except Exception as exc:
+        logger.exception("Channel banner upload failed")
+        flash(f"آپلود بنر ناموفق بود: {exc}", "danger")
+    return redirect(url_for("channel_studio", channel_id=channel_id))
+
+
+@app.post("/channels/<int:channel_id>/studio/watermark")
+@login_required
+def channel_studio_watermark(channel_id: int):
+    require_csrf()
+    upload = request.files.get("watermark")
+    try:
+        if not upload or not upload.filename:
+            raise ValueError("فایل Watermark انتخاب نشده است")
+        content = upload.read(10 * 1024 * 1024 + 1)
+        timing_type = request.form.get("timing_type", "offsetFromStart")
+        try:
+            offset_ms = max(0, int(float(request.form.get("offset_seconds", "0") or 0) * 1000))
+        except ValueError:
+            offset_ms = 0
+        duration_raw = request.form.get("duration_seconds", "").strip()
+        duration_ms = None
+        if duration_raw:
+            duration_ms = max(1000, int(float(duration_raw) * 1000))
+        set_channel_watermark(
+            channel_id,
+            content,
+            upload.mimetype or "application/octet-stream",
+            timing_type=timing_type,
+            offset_ms=offset_ms,
+            duration_ms=duration_ms,
+            target_channel_id=request.form.get("target_channel_id", ""),
+        )
+        _audit("panel", "channel_watermark_set", f"channel_id={channel_id}")
+        flash("Watermark کانال روی YouTube تنظیم شد.", "success")
+    except Exception as exc:
+        logger.exception("Channel watermark update failed")
+        flash(f"تنظیم Watermark ناموفق بود: {exc}", "danger")
+    return redirect(url_for("channel_studio", channel_id=channel_id))
+
+
+@app.post("/channels/<int:channel_id>/studio/watermark/remove")
+@login_required
+def channel_studio_watermark_remove(channel_id: int):
+    require_csrf()
+    try:
+        remove_channel_watermark(channel_id)
+        _audit("panel", "channel_watermark_removed", f"channel_id={channel_id}")
+        flash("Watermark کانال حذف شد.", "success")
+    except Exception as exc:
+        flash(f"حذف Watermark ناموفق بود: {exc}", "danger")
+    return redirect(url_for("channel_studio", channel_id=channel_id))
+
+
+@app.post("/channels/<int:channel_id>/studio/localization")
+@login_required
+def channel_studio_localization(channel_id: int):
+    require_csrf()
+    try:
+        language = request.form.get("language", "").strip()
+        update_channel_localization(
+            channel_id,
+            language,
+            request.form.get("localized_title", ""),
+            request.form.get("localized_description", ""),
+        )
+        _audit("panel", "channel_localization_updated", f"channel_id={channel_id}; language={language}")
+        flash(f"ترجمه {language} ذخیره شد.", "success")
+    except Exception as exc:
+        flash(f"ذخیره ترجمه ناموفق بود: {exc}", "danger")
+    return redirect(url_for("channel_studio", channel_id=channel_id) + "#localizations")
+
+
+@app.post("/channels/<int:channel_id>/studio/localization/delete")
+@login_required
+def channel_studio_localization_delete(channel_id: int):
+    require_csrf()
+    language = request.form.get("language", "").strip()
+    try:
+        delete_channel_localization(channel_id, language)
+        _audit("panel", "channel_localization_deleted", f"channel_id={channel_id}; language={language}")
+        flash(f"ترجمه {language} حذف شد.", "success")
+    except Exception as exc:
+        flash(f"حذف ترجمه ناموفق بود: {exc}", "danger")
+    return redirect(url_for("channel_studio", channel_id=channel_id) + "#localizations")
+
+
+@app.post("/channels/<int:channel_id>/studio/sections")
+@login_required
+def channel_studio_section_create(channel_id: int):
+    require_csrf()
+    try:
+        playlist_ids = _studio_id_list(*request.form.getlist("playlist_ids"), request.form.get("playlist_ids_manual", ""))
+        channel_ids = _studio_id_list(request.form.get("channel_ids", ""))
+        create_channel_section(
+            channel_id,
+            request.form.get("section_type", ""),
+            title=request.form.get("section_title", ""),
+            position=int(request.form.get("position", "0") or 0),
+            playlist_ids=playlist_ids,
+            channel_ids=channel_ids,
+        )
+        _audit("panel", "channel_section_created", f"channel_id={channel_id}")
+        flash("بخش جدید به Home کانال اضافه شد.", "success")
+    except Exception as exc:
+        logger.exception("Channel section create failed")
+        flash(f"ساخت بخش Home ناموفق بود: {exc}", "danger")
+    return redirect(url_for("channel_studio", channel_id=channel_id) + "#home-layout")
+
+
+@app.post("/channels/<int:channel_id>/studio/sections/<section_id>/update")
+@login_required
+def channel_studio_section_update(channel_id: int, section_id: str):
+    require_csrf()
+    try:
+        playlist_ids = _studio_id_list(request.form.get("playlist_ids", ""))
+        channel_ids = _studio_id_list(request.form.get("channel_ids", ""))
+        update_channel_section(
+            channel_id,
+            section_id,
+            request.form.get("section_type", ""),
+            title=request.form.get("section_title", ""),
+            position=int(request.form.get("position", "0") or 0),
+            playlist_ids=playlist_ids,
+            channel_ids=channel_ids,
+        )
+        _audit("panel", "channel_section_updated", f"channel_id={channel_id}; section_id={section_id}")
+        flash("بخش Home بروزرسانی شد.", "success")
+    except Exception as exc:
+        logger.exception("Channel section update failed")
+        flash(f"بروزرسانی بخش ناموفق بود: {exc}", "danger")
+    return redirect(url_for("channel_studio", channel_id=channel_id) + "#home-layout")
+
+
+@app.post("/channels/<int:channel_id>/studio/sections/<section_id>/delete")
+@login_required
+def channel_studio_section_delete(channel_id: int, section_id: str):
+    require_csrf()
+    try:
+        delete_channel_section(channel_id, section_id)
+        _audit("panel", "channel_section_deleted", f"channel_id={channel_id}; section_id={section_id}")
+        flash("بخش از Home کانال حذف شد.", "success")
+    except Exception as exc:
+        flash(f"حذف بخش ناموفق بود: {exc}", "danger")
+    return redirect(url_for("channel_studio", channel_id=channel_id) + "#home-layout")
+
 
 
 @app.post("/channels/<int:channel_id>/analytics/sync")
