@@ -38,6 +38,11 @@ from publishing import (
     update_publishing_config,
     utc_to_channel_local,
 )
+from instagram_direct import (
+    list_instagram_group_routes,
+    set_instagram_group_route,
+    sync_instagram_groups,
+)
 from integrations import (
     add_telegram_admin,
     build_instagram_cookie_blob,
@@ -427,11 +432,21 @@ def integrations_page():
     primary_admin_id = get_secret("telegram_primary_admin_id")
     admin_count = telegram_admin_count() + len(Config.TELEGRAM_ADMIN_IDS)
     claim_code = session.pop("telegram_claim_code", None)
+    with SessionLocal() as db:
+        instagram_route_channels = (
+            db.query(YouTubeChannel)
+            .filter(YouTubeChannel.is_active.is_(True))
+            .order_by(YouTubeChannel.label.asc())
+            .all()
+        )
+    instagram_groups = list_instagram_group_routes() if instagram.get("configured") else []
     return render_template(
         "integrations.html",
         google_status=google_status,
         instagram=instagram,
         instagram_direct=instagram_direct,
+        instagram_groups=instagram_groups,
+        instagram_route_channels=instagram_route_channels,
         bot_configured=bot_configured,
         bot_username=bot_username,
         primary_admin_id=primary_admin_id,
@@ -530,6 +545,56 @@ def integrations_instagram_disconnect():
     _audit("panel", "instagram_disconnected")
     flash("اتصال Instagram حذف شد.", "success")
     return redirect(url_for("integrations_page"))
+
+
+
+
+@app.post("/integrations/instagram/groups/refresh")
+@login_required
+def integrations_instagram_groups_refresh():
+    require_csrf()
+    try:
+        result = sync_instagram_groups(50)
+        _audit("panel", "instagram_groups_refreshed", f"count={result.get('count', 0)}")
+        if result.get("count"):
+            flash(f"{result['count']} گروه Instagram پیدا و بروزرسانی شد.", "success")
+        else:
+            flash("فعلاً گروه Instagram در Inbox پیدا نشد. بعد از ساخت گروه دوباره Update List را بزن.", "warning")
+    except Exception as exc:
+        logger.exception("Instagram group refresh failed")
+        flash(f"بروزرسانی گروه‌های Instagram ناموفق بود: {exc}", "danger")
+    return redirect(url_for("integrations_page") + "#instagram-group-routing")
+
+
+@app.post("/integrations/instagram/groups/<thread_id>/route")
+@login_required
+def integrations_instagram_group_route(thread_id: str):
+    require_csrf()
+    raw_channel = request.form.get("channel_id", "").strip()
+    try:
+        channel_id = int(raw_channel) if raw_channel else None
+        route = set_instagram_group_route(thread_id, channel_id)
+        if route.enabled and route.channel_id:
+            with SessionLocal() as db:
+                channel = db.get(YouTubeChannel, route.channel_id)
+                channel_name = (channel.label or channel.title) if channel else f"#{route.channel_id}"
+            _audit(
+                "panel",
+                "instagram_group_routed",
+                f"thread_id={thread_id}; channel_id={route.channel_id}",
+            )
+            flash(
+                f"گروه «{route.thread_title}» به «{channel_name}» وصل شد. "
+                "از این به بعد Shareهای جدید بدون تأیید ادمین مستقیم وارد Publishing Queue همین کانال می‌شوند.",
+                "success",
+            )
+        else:
+            _audit("panel", "instagram_group_unrouted", f"thread_id={thread_id}")
+            flash(f"اتصال گروه «{route.thread_title}» غیرفعال شد.", "success")
+    except Exception as exc:
+        logger.exception("Instagram group routing update failed")
+        flash(f"ذخیره اتصال گروه ناموفق بود: {exc}", "danger")
+    return redirect(url_for("integrations_page") + "#instagram-group-routing")
 
 
 @app.post("/integrations/google")
