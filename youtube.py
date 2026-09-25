@@ -209,6 +209,335 @@ def _manager_service(channel_id: int):
     return youtube_data_service(creds), expected_channel_id, channel_title
 
 
+
+def _owned_channel_resource(service, expected_channel_id: str, part: str) -> dict:
+    response = service.channels().list(part=part, id=expected_channel_id).execute()
+    items = response.get("items", [])
+    if not items or items[0].get("id") != expected_channel_id:
+        raise PermissionError("Channel does not belong to this connection")
+    return items[0]
+
+
+def get_channel_studio_data(channel_id: int) -> dict:
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    item = _owned_channel_resource(
+        service,
+        expected_channel_id,
+        "snippet,brandingSettings,status,localizations,statistics",
+    )
+    snippet = item.get("snippet", {}) or {}
+    branding = item.get("brandingSettings", {}) or {}
+    channel_settings = branding.get("channel", {}) or {}
+    image_settings = branding.get("image", {}) or {}
+    status = item.get("status", {}) or {}
+    thumbnails = snippet.get("thumbnails", {}) or {}
+    thumb = (thumbnails.get("high") or thumbnails.get("medium") or thumbnails.get("default") or {}).get("url", "")
+    return {
+        "id": expected_channel_id,
+        "title": snippet.get("title") or "",
+        "custom_url": snippet.get("customUrl") or "",
+        "description": channel_settings.get("description", snippet.get("description") or ""),
+        "thumbnail_url": thumb,
+        "country": channel_settings.get("country") or snippet.get("country") or "",
+        "default_language": channel_settings.get("defaultLanguage") or snippet.get("defaultLanguage") or "",
+        "keywords": channel_settings.get("keywords") or "",
+        "tracking_analytics_id": channel_settings.get("trackingAnalyticsAccountId") or "",
+        "unsubscribed_trailer": channel_settings.get("unsubscribedTrailer") or "",
+        "banner_url": image_settings.get("bannerExternalUrl") or "",
+        "localizations": item.get("localizations") or {},
+        "status": status,
+        "statistics": item.get("statistics") or {},
+    }
+
+
+def _branding_update_payload(service, expected_channel_id: str) -> dict:
+    item = _owned_channel_resource(service, expected_channel_id, "brandingSettings")
+    branding = item.get("brandingSettings", {}) or {}
+    current_channel = branding.get("channel", {}) or {}
+    allowed = (
+        "country",
+        "description",
+        "defaultLanguage",
+        "keywords",
+        "trackingAnalyticsAccountId",
+        "unsubscribedTrailer",
+    )
+    channel_settings = {key: current_channel[key] for key in allowed if current_channel.get(key) not in (None, "")}
+    payload = {"channel": channel_settings}
+    banner_url = (branding.get("image", {}) or {}).get("bannerExternalUrl")
+    if banner_url:
+        payload["image"] = {"bannerExternalUrl": banner_url}
+    return payload
+
+
+def update_channel_branding(
+    channel_id: int,
+    *,
+    description: str = "",
+    keywords: str = "",
+    country: str = "",
+    default_language: str = "",
+    tracking_analytics_id: str = "",
+    unsubscribed_trailer: str = "",
+) -> dict:
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    branding = _branding_update_payload(service, expected_channel_id)
+    settings = branding.setdefault("channel", {})
+    values = {
+        "description": (description or "").strip()[:1000],
+        "keywords": (keywords or "").strip()[:500],
+        "country": (country or "").strip().upper()[:2],
+        "defaultLanguage": (default_language or "").strip()[:20],
+        "trackingAnalyticsAccountId": (tracking_analytics_id or "").strip()[:120],
+        "unsubscribedTrailer": (unsubscribed_trailer or "").strip()[:32],
+    }
+    for key, value in values.items():
+        if value:
+            settings[key] = value
+        else:
+            settings.pop(key, None)
+    result = service.channels().update(
+        part="brandingSettings",
+        body={"id": expected_channel_id, "brandingSettings": branding},
+    ).execute()
+    refresh_channel(channel_id)
+    return result
+
+
+def _image_dimensions(content: bytes, mime_type: str) -> tuple[int, int] | tuple[None, None]:
+    if mime_type == "image/png" and len(content) >= 24 and content[:8] == b"\x89PNG\r\n\x1a\n":
+        return int.from_bytes(content[16:20], "big"), int.from_bytes(content[20:24], "big")
+    if mime_type == "image/jpeg" and content[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 < len(content):
+            if content[i] != 0xFF:
+                i += 1
+                continue
+            marker = content[i + 1]
+            i += 2
+            if marker in {0xD8, 0xD9}:
+                continue
+            if i + 2 > len(content):
+                break
+            length = int.from_bytes(content[i:i + 2], "big")
+            if length < 2 or i + length > len(content):
+                break
+            if marker in {0xC0,0xC1,0xC2,0xC3,0xC5,0xC6,0xC7,0xC9,0xCA,0xCB,0xCD,0xCE,0xCF} and length >= 7:
+                return int.from_bytes(content[i + 5:i + 7], "big"), int.from_bytes(content[i + 3:i + 5], "big")
+            i += length
+    return None, None
+
+
+def update_channel_audience(channel_id: int, made_for_kids: bool) -> dict:
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    return service.channels().update(
+        part="status",
+        body={
+            "id": expected_channel_id,
+            "status": {"selfDeclaredMadeForKids": bool(made_for_kids)},
+        },
+    ).execute()
+
+
+def upload_channel_banner(channel_id: int, content: bytes, mime_type: str) -> dict:
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    if mime_type not in {"image/jpeg", "image/png", "application/octet-stream"}:
+        raise ValueError("Banner must be JPEG or PNG")
+    if not content:
+        raise ValueError("Banner file is empty")
+    if len(content) > 6 * 1024 * 1024:
+        raise ValueError("Banner is larger than YouTube's 6MB limit")
+    detected_type = mime_type
+    if mime_type == "application/octet-stream":
+        if content[:8] == b"\x89PNG\r\n\x1a\n":
+            detected_type = "image/png"
+        elif content[:2] == b"\xff\xd8":
+            detected_type = "image/jpeg"
+    width, height = _image_dimensions(content, detected_type)
+    if width and height:
+        if width < 2048 or height < 1152:
+            raise ValueError(f"Banner is {width}×{height}; YouTube requires at least 2048×1152")
+        if abs((width / height) - (16 / 9)) > 0.03:
+            raise ValueError("Banner must use a 16:9 aspect ratio")
+    media = MediaIoBaseUpload(io.BytesIO(content), mimetype=detected_type, resumable=False)
+    uploaded = service.channelBanners().insert(media_body=media).execute()
+    banner_url = uploaded.get("url")
+    if not banner_url:
+        raise RuntimeError("YouTube did not return a banner URL")
+    branding = _branding_update_payload(service, expected_channel_id)
+    branding["image"] = {"bannerExternalUrl": banner_url}
+    result = service.channels().update(
+        part="brandingSettings",
+        body={"id": expected_channel_id, "brandingSettings": branding},
+    ).execute()
+    return result
+
+
+def set_channel_watermark(
+    channel_id: int,
+    content: bytes,
+    mime_type: str,
+    *,
+    timing_type: str = "offsetFromStart",
+    offset_ms: int = 0,
+    duration_ms: int | None = None,
+    target_channel_id: str = "",
+) -> None:
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    if mime_type not in {"image/jpeg", "image/png", "application/octet-stream"}:
+        raise ValueError("Watermark must be JPEG or PNG")
+    if not content:
+        raise ValueError("Watermark file is empty")
+    if len(content) > 10 * 1024 * 1024:
+        raise ValueError("Watermark is larger than YouTube's 10MB limit")
+    if timing_type not in {"offsetFromStart", "offsetFromEnd"}:
+        timing_type = "offsetFromStart"
+    offset_ms = max(0, int(offset_ms or 0))
+    if timing_type == "offsetFromEnd":
+        offset_ms = max(1000, offset_ms)
+    timing = {"type": timing_type, "offsetMs": offset_ms}
+    if duration_ms is not None and int(duration_ms) > 0:
+        duration_ms = max(1000, int(duration_ms))
+        if timing_type == "offsetFromEnd":
+            duration_ms = min(duration_ms, offset_ms)
+        timing["durationMs"] = duration_ms
+    body = {"timing": timing}
+    target = (target_channel_id or "").strip()
+    if target:
+        body["targetChannelId"] = target[:64]
+    media = MediaIoBaseUpload(io.BytesIO(content), mimetype=mime_type, resumable=False)
+    service.watermarks().set(channelId=expected_channel_id, body=body, media_body=media).execute()
+
+
+def remove_channel_watermark(channel_id: int) -> None:
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    service.watermarks().unset(channelId=expected_channel_id).execute()
+
+
+def update_channel_localization(channel_id: int, language: str, title: str, description: str) -> dict:
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    item = _owned_channel_resource(service, expected_channel_id, "brandingSettings,localizations")
+    default_language = (item.get("brandingSettings", {}).get("channel", {}) or {}).get("defaultLanguage")
+    if not default_language:
+        raise ValueError("Set a default language before adding localizations")
+    language = (language or "").strip()
+    if not language:
+        raise ValueError("Localization language is required")
+    localizations = dict(item.get("localizations") or {})
+    localizations[language] = {
+        "title": (title or "").strip()[:100],
+        "description": (description or "").strip()[:1000],
+    }
+    if not localizations[language]["title"]:
+        raise ValueError("Localized title is required")
+    return service.channels().update(
+        part="localizations",
+        body={"id": expected_channel_id, "localizations": localizations},
+    ).execute()
+
+
+def delete_channel_localization(channel_id: int, language: str) -> dict:
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    item = _owned_channel_resource(service, expected_channel_id, "localizations")
+    localizations = dict(item.get("localizations") or {})
+    localizations.pop((language or "").strip(), None)
+    return service.channels().update(
+        part="localizations",
+        body={"id": expected_channel_id, "localizations": localizations},
+    ).execute()
+
+
+def list_channel_sections(channel_id: int) -> list[dict]:
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    response = service.channelSections().list(
+        part="snippet,contentDetails",
+        channelId=expected_channel_id,
+    ).execute()
+    sections = []
+    for item in response.get("items", []):
+        snippet = item.get("snippet", {}) or {}
+        details = item.get("contentDetails", {}) or {}
+        sections.append({
+            "id": item.get("id") or "",
+            "type": snippet.get("type") or "",
+            "title": snippet.get("title") or "",
+            "position": int(snippet.get("position", 0) or 0),
+            "playlists": details.get("playlists") or [],
+            "channels": details.get("channels") or [],
+        })
+    sections.sort(key=lambda row: row["position"])
+    return sections
+
+
+def _section_body(section_type: str, title: str, position: int, playlist_ids: list[str], channel_ids: list[str]) -> dict:
+    allowed_types = {
+        "allPlaylists", "completedEvents", "liveEvents", "multipleChannels", "multiplePlaylists",
+        "popularUploads", "recentUploads", "singlePlaylist", "subscriptions", "upcomingEvents",
+    }
+    if section_type not in allowed_types:
+        raise ValueError("Invalid channel section type")
+    snippet = {"type": section_type, "position": max(0, int(position or 0))}
+    if section_type in {"multiplePlaylists", "multipleChannels"}:
+        clean_title = (title or "").strip()[:100]
+        if not clean_title:
+            raise ValueError("This section type requires a title")
+        snippet["title"] = clean_title
+    body = {"snippet": snippet}
+    if section_type == "singlePlaylist":
+        if len(playlist_ids) != 1:
+            raise ValueError("Single playlist section requires exactly one playlist")
+        body["contentDetails"] = {"playlists": playlist_ids}
+    elif section_type == "multiplePlaylists":
+        if not playlist_ids:
+            raise ValueError("Choose at least one playlist")
+        body["contentDetails"] = {"playlists": playlist_ids}
+    elif section_type == "multipleChannels":
+        if not channel_ids:
+            raise ValueError("Enter at least one channel ID")
+        body["contentDetails"] = {"channels": channel_ids}
+    return body
+
+
+def create_channel_section(
+    channel_id: int,
+    section_type: str,
+    title: str = "",
+    position: int = 0,
+    playlist_ids: list[str] | None = None,
+    channel_ids: list[str] | None = None,
+) -> dict:
+    service, _, _ = _manager_service(channel_id)
+    body = _section_body(section_type, title, position, playlist_ids or [], channel_ids or [])
+    return service.channelSections().insert(part="snippet,contentDetails", body=body).execute()
+
+
+def update_channel_section(
+    channel_id: int,
+    section_id: str,
+    section_type: str,
+    title: str = "",
+    position: int = 0,
+    playlist_ids: list[str] | None = None,
+    channel_ids: list[str] | None = None,
+) -> dict:
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    existing = service.channelSections().list(part="snippet", id=section_id).execute().get("items", [])
+    if not existing or existing[0].get("snippet", {}).get("channelId") != expected_channel_id:
+        raise PermissionError("Channel section does not belong to this channel")
+    body = _section_body(section_type, title, position, playlist_ids or [], channel_ids or [])
+    body["id"] = section_id
+    return service.channelSections().update(part="snippet,contentDetails", body=body).execute()
+
+
+def delete_channel_section(channel_id: int, section_id: str) -> None:
+    service, expected_channel_id, _ = _manager_service(channel_id)
+    existing = service.channelSections().list(part="snippet", id=section_id).execute().get("items", [])
+    if not existing or existing[0].get("snippet", {}).get("channelId") != expected_channel_id:
+        raise PermissionError("Channel section does not belong to this channel")
+    service.channelSections().delete(id=section_id).execute()
+
+
+
 def _owned_video(service, expected_channel_id: str, video_id: str, part: str = "snippet,status,statistics,contentDetails") -> dict:
     # Ownership validation always needs snippet.channelId. Callers may only
     # need status/statistics, but omitting snippet would create a false
