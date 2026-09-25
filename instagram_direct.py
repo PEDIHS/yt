@@ -14,7 +14,7 @@ import httpx
 
 from db import SessionLocal, init_db
 from integrations import get_secret, resolve_instagram_cookie_blob, resolve_instagram_session, resolve_telegram_token, set_secret
-from models import InstagramDirectShare, TelegramAdmin, YouTubeChannel
+from models import InstagramDirectGroupRoute, InstagramDirectShare, TelegramAdmin, YouTubeChannel
 
 logger = logging.getLogger("instagram-direct")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -112,6 +112,133 @@ def fetch_primary_inbox(limit: int = 20) -> dict:
         last_error = f"HTTP {response.status_code}"
 
     raise RuntimeError(f"Instagram Direct inbox unavailable: {last_error or 'unknown error'}")
+
+
+
+
+def _thread_identifier(thread: dict) -> str:
+    return str(thread.get("thread_v2_id") or thread.get("thread_id") or "").strip()
+
+
+def _thread_members(thread: dict) -> list[str]:
+    members: list[str] = []
+    for user in thread.get("users", []) or []:
+        value = str(user.get("username") or user.get("full_name") or user.get("pk") or "").strip()
+        if value and value not in members:
+            members.append(value)
+    return members
+
+
+def _is_group_thread(thread: dict) -> bool:
+    raw = thread.get("is_group")
+    if raw is True or raw == 1 or str(raw).lower() == "true":
+        return True
+    participants = int(thread.get("participants_count") or 0)
+    return participants >= 3 or len(thread.get("users", []) or []) >= 2
+
+
+def extract_instagram_groups(payload: dict) -> list[dict]:
+    inbox = payload.get("inbox") or payload
+    threads = inbox.get("threads", []) if isinstance(inbox, dict) else []
+    groups: list[dict] = []
+    for thread in threads:
+        if not isinstance(thread, dict) or not _is_group_thread(thread):
+            continue
+        thread_id = _thread_identifier(thread)
+        if not thread_id:
+            continue
+        members = _thread_members(thread)
+        title = str(thread.get("thread_title") or "").strip()
+        if not title:
+            title = "Instagram Group " + thread_id[-6:]
+        groups.append({
+            "thread_id": thread_id[:255],
+            "thread_title": title[:255],
+            "member_count": int(thread.get("participants_count") or (len(members) + 1)),
+            "members": members[:30],
+        })
+    return groups
+
+
+def _upsert_group_metadata(db, payload: dict) -> list[InstagramDirectGroupRoute]:
+    now = datetime.utcnow()
+    rows: list[InstagramDirectGroupRoute] = []
+    for group in extract_instagram_groups(payload):
+        row = db.get(InstagramDirectGroupRoute, group["thread_id"])
+        if row is None:
+            row = InstagramDirectGroupRoute(
+                thread_id=group["thread_id"],
+                discovered_at=now,
+            )
+            db.add(row)
+        row.thread_title = group["thread_title"]
+        row.member_count = group["member_count"]
+        row.members_json = json.dumps(group["members"], ensure_ascii=False)
+        row.last_seen_at = now
+        rows.append(row)
+    return rows
+
+
+def sync_instagram_groups(limit: int = 50) -> dict:
+    payload = fetch_primary_inbox(limit)
+    groups = extract_instagram_groups(payload)
+    with SessionLocal() as db:
+        _upsert_group_metadata(db, payload)
+        db.commit()
+    return {"groups": groups, "count": len(groups)}
+
+
+def list_instagram_group_routes() -> list[dict]:
+    with SessionLocal() as db:
+        routes = db.query(InstagramDirectGroupRoute).order_by(
+            InstagramDirectGroupRoute.enabled.desc(),
+            InstagramDirectGroupRoute.thread_title.asc(),
+        ).all()
+        channels = {row.id: row for row in db.query(YouTubeChannel).all()}
+        result = []
+        for route in routes:
+            try:
+                members = json.loads(route.members_json or "[]")
+            except Exception:
+                members = []
+            channel = channels.get(route.channel_id) if route.channel_id else None
+            result.append({
+                "thread_id": route.thread_id,
+                "thread_title": route.thread_title,
+                "member_count": route.member_count,
+                "members": members if isinstance(members, list) else [],
+                "channel_id": route.channel_id,
+                "channel_label": (channel.label or channel.title) if channel else "",
+                "enabled": bool(route.enabled and channel and channel.is_active),
+                "configured": bool(route.channel_id),
+                "last_seen_at": route.last_seen_at,
+                "last_routed_at": route.last_routed_at,
+                "routed_count": int(route.routed_count or 0),
+            })
+        return result
+
+
+def set_instagram_group_route(thread_id: str, channel_id: int | None) -> InstagramDirectGroupRoute:
+    thread_id = str(thread_id or "").strip()
+    if not thread_id:
+        raise ValueError("Instagram group id is missing")
+    with SessionLocal() as db:
+        route = db.get(InstagramDirectGroupRoute, thread_id)
+        if not route:
+            raise RuntimeError("Instagram group was not found; refresh the group list first")
+        if channel_id is None:
+            route.channel_id = None
+            route.enabled = False
+        else:
+            channel = db.get(YouTubeChannel, int(channel_id))
+            if not channel or not channel.is_active:
+                raise RuntimeError("Selected YouTube channel is unavailable")
+            route.channel_id = channel.id
+            route.enabled = True
+        route.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(route)
+        return route
 
 
 def _walk_strings(value: Any):
@@ -368,12 +495,146 @@ def send_instagram_received_ack(thread_id: str, text: str = "دریافت شد")
             browser.close()
 
 
-def _ack_share_safely(share_id: int, thread_id: str) -> None:
+def _ack_share_safely(share_id: int, thread_id: str, text: str = "دریافت شد") -> None:
     try:
-        send_instagram_received_ack(thread_id)
+        send_instagram_received_ack(thread_id, text)
         logger.info("Instagram acknowledgement sent for share %s", share_id)
     except Exception as exc:
         logger.warning("Instagram Direct acknowledgement failed for share %s: %s", share_id, exc)
+
+
+
+
+def _notify_auto_route_failure(share_id: int, error: str) -> None:
+    token = resolve_telegram_token()
+    admin_id = _primary_admin_id()
+    if not token or not admin_id:
+        return
+    with SessionLocal() as db:
+        share = db.get(InstagramDirectShare, share_id)
+        if not share:
+            return
+        channel = db.get(YouTubeChannel, share.selected_channel_id) if share.selected_channel_id else None
+        channel_name = (channel.label or channel.title) if channel else "Unknown channel"
+        title = share.title_hint or share.media_url
+    try:
+        httpx.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": admin_id,
+                "text": (
+                    "⚠️ Instagram Group Auto Route ناموفق بود\n\n"
+                    f"🎬 {title[:180]}\n"
+                    f"📺 {channel_name}\n"
+                    f"🧾 Share #{share_id}\n"
+                    f"خطا: {error[:700]}"
+                ),
+                "disable_web_page_preview": True,
+            },
+            timeout=15,
+        )
+    except Exception:
+        logger.exception("Could not send Instagram group route failure alert")
+
+
+def _auto_queue_share(share_id: int) -> bool:
+    from jobs import create_job, mark_job_failed
+    from publishing import schedule_job_smart
+
+    with SessionLocal() as db:
+        share = db.get(InstagramDirectShare, share_id)
+        if not share or share.status not in {"auto_route_pending", "auto_route_failed"}:
+            return False
+        channel_id = share.selected_channel_id
+        channel = db.get(YouTubeChannel, channel_id) if channel_id else None
+        if not channel or not channel.is_active:
+            share.status = "auto_route_failed"
+            db.commit()
+            raise RuntimeError("Mapped YouTube channel is unavailable")
+
+        duplicate = db.query(InstagramDirectShare).filter(
+            InstagramDirectShare.id != share.id,
+            InstagramDirectShare.media_url == share.media_url,
+            InstagramDirectShare.selected_channel_id == channel_id,
+            InstagramDirectShare.upload_job_id.isnot(None),
+            InstagramDirectShare.status.in_([
+                "scheduled", "queued", "completed", "copyright_blocked",
+                "preflight_blocked", "reauth_required",
+            ]),
+        ).order_by(InstagramDirectShare.id.desc()).first()
+        if duplicate:
+            share.status = "superseded"
+            db.commit()
+            logger.info(
+                "Instagram group share %s superseded by share %s / job %s",
+                share.id, duplicate.id, duplicate.upload_job_id,
+            )
+            return False
+
+        claimed = db.query(InstagramDirectShare).filter(
+            InstagramDirectShare.id == share_id,
+            InstagramDirectShare.status.in_(["auto_route_pending", "auto_route_failed"]),
+            InstagramDirectShare.upload_job_id.is_(None),
+        ).update(
+            {
+                InstagramDirectShare.status: "auto_queuing",
+                InstagramDirectShare.selected_at: datetime.utcnow(),
+                InstagramDirectShare.confirmed_at: datetime.utcnow(),
+            },
+            synchronize_session=False,
+        )
+        db.commit()
+        if claimed != 1:
+            return False
+
+        share = db.get(InstagramDirectShare, share_id)
+        source_url = share.media_url
+        title = (share.title_hint or (
+            "Instagram Reel" if share.media_type == "reel" else "Instagram Post"
+        ))[:255]
+
+    job = None
+    try:
+        job = create_job(
+            channel_id=channel_id,
+            source_url=source_url,
+            title=title,
+            source="instagram-group",
+        )
+        with SessionLocal() as db:
+            share = db.get(InstagramDirectShare, share_id)
+            if share:
+                share.upload_job_id = job.id
+                db.commit()
+
+        schedule = schedule_job_smart(job.id)
+        with SessionLocal() as db:
+            share = db.get(InstagramDirectShare, share_id)
+            route = db.get(InstagramDirectGroupRoute, share.thread_id) if share else None
+            if share:
+                share.status = "scheduled"
+            if route:
+                route.routed_count = int(route.routed_count or 0) + 1
+                route.last_routed_at = datetime.utcnow()
+            db.commit()
+        logger.info(
+            "Instagram group share %s routed to channel %s as Job %s at %s",
+            share_id, channel_id, job.id, schedule.scheduled_for,
+        )
+        return True
+    except Exception as exc:
+        if job is not None:
+            try:
+                mark_job_failed(job.id, f"Instagram group auto route failed: {exc}")
+            except Exception:
+                logger.exception("Could not mark failed Instagram group Job %s", job.id)
+        with SessionLocal() as db:
+            share = db.get(InstagramDirectShare, share_id)
+            if share:
+                share.status = "auto_route_failed"
+                db.commit()
+        _notify_auto_route_failure(share_id, str(exc))
+        raise
 
 
 def notify_pending_share(share_id: int) -> None:
@@ -429,10 +690,20 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
     inbox = payload.get("inbox") or payload
     threads = inbox.get("threads", []) if isinstance(inbox, dict) else []
     created_ids: list[int] = []
+    auto_ids: list[int] = []
+    manual_ids: list[int] = []
 
     with SessionLocal() as db:
+        _upsert_group_metadata(db, payload)
+        db.flush()
         for thread in threads:
-            thread_id = str(thread.get("thread_v2_id") or thread.get("thread_id") or "")
+            thread_id = _thread_identifier(thread)
+            route = db.get(InstagramDirectGroupRoute, thread_id) if thread_id else None
+            auto_channel_id = None
+            if notify and route and route.enabled and route.channel_id:
+                channel = db.get(YouTubeChannel, route.channel_id)
+                if channel and channel.is_active:
+                    auto_channel_id = channel.id
             items = thread.get("items", []) or []
             for item in items:
                 media = extract_shared_media(item)
@@ -463,16 +734,38 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
                     title_hint=media["title"][:255],
                     thumbnail_url=media["thumbnail_url"],
                     raw_json=json.dumps(item, ensure_ascii=False)[:100000],
-                    status="pending_channel" if notify else "ignored_baseline",
+                    status=(
+                        "auto_route_pending"
+                        if auto_channel_id
+                        else ("pending_channel" if notify else "ignored_baseline")
+                    ),
+                    selected_channel_id=auto_channel_id,
                     detected_at=datetime.utcnow(),
                 )
                 db.add(row)
                 db.flush()
                 created_ids.append(row.id)
+                if auto_channel_id:
+                    auto_ids.append(row.id)
+                elif notify:
+                    manual_ids.append(row.id)
         db.commit()
 
     if notify:
-        for share_id in created_ids:
+        for share_id in auto_ids:
+            routed = False
+            try:
+                routed = _auto_queue_share(share_id)
+            except Exception:
+                logger.exception("Instagram group auto route failed for share %s", share_id)
+            with SessionLocal() as db:
+                share = db.get(InstagramDirectShare, share_id)
+                thread_id = share.thread_id if share else ""
+            if thread_id:
+                ack_text = "دریافت شد؛ وارد صف انتشار شد ✅" if routed else "دریافت شد"
+                _ack_executor.submit(_ack_share_safely, share_id, thread_id, ack_text)
+
+        for share_id in manual_ids:
             try:
                 notify_pending_share(share_id)
             except Exception:
