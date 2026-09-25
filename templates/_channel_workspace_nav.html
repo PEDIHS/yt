@@ -18,6 +18,7 @@
   </button>
   <div class="channel-workspace-links" id="channelWorkspaceLinks">
     <a href="{{ url_for('channel_detail', channel_id=workspace_channel.id) }}" class="{% if request.endpoint == 'channel_detail' %}active{% endif %}"><i data-lucide="layout-dashboard"></i>Overview</a>
+    <a href="{{ url_for('channel_studio', channel_id=workspace_channel.id) }}" class="{% if request.endpoint and request.endpoint.startswith('channel_studio') %}active{% endif %}"><i data-lucide="settings-2"></i>Studio</a>
     <a href="{{ url_for('videos_manager', channel_id=workspace_channel.id) }}" class="{% if request.endpoint in ['videos_manager','video_detail'] %}active{% endif %}"><i data-lucide="clapperboard"></i>Videos</a>
     <a href="{{ url_for('publishing_page', channel_id=workspace_channel.id) }}" class="{% if request.endpoint == 'publishing_page' %}active{% endif %}"><i data-lucide="calendar-range"></i>Queue</a>
     <a href="{{ url_for('upload', channel_id=workspace_channel.id) }}" class="{% if request.endpoint == 'upload' %}active{% endif %}"><i data-lucide="smartphone"></i>Shorts</a>
