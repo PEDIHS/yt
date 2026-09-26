@@ -758,10 +758,17 @@ def oauth_callback():
             session.pop("oauth_state", None)
             return render_template("oauth_success.html", channel=channel, message=message)
 
+        with SessionLocal() as db:
+            before_channel_ids = {row.youtube_channel_id for row in db.query(YouTubeChannel).all()}
+
         connected_channels = connect_channels(
             flow.credentials,
             session.get("oauth_label", "YouTube Channel"),
         )
+        newly_connected = [
+            channel for channel in connected_channels
+            if channel.youtube_channel_id not in before_channel_ids
+        ]
         analytics_synced = 0
         analytics_failed = 0
         resumed_jobs: list[int] = []
@@ -781,12 +788,25 @@ def oauth_callback():
         session.pop("oauth_state", None)
         session.pop("oauth_label", None)
         session.pop("oauth_mode", None)
+        session.pop("oauth_parent_channel_id", None)
 
         channel_names = "، ".join(f"«{channel.title}»" for channel in connected_channels[:5])
         extra_count = max(0, len(connected_channels) - 5)
         if extra_count:
             channel_names += f" و {extra_count} کانال دیگر"
-        if len(connected_channels) == 1:
+        if mode == "subchannel" and not newly_connected:
+            flash(
+                f"کانال {channel_names} از قبل داخل پنل بود. "
+                "برای اضافه‌کردن زیرچنل بعدی، دوباره «افزودن زیرچنل» را بزن و در Google یک Channel / Brand Account متفاوت انتخاب کن.",
+                "warning",
+            )
+        elif mode == "subchannel":
+            flash(
+                f"{len(newly_connected)} زیرچنل جدید اضافه شد: "
+                + "، ".join(f"«{channel.title}»" for channel in newly_connected),
+                "success",
+            )
+        elif len(connected_channels) == 1:
             flash(
                 f"کانال {channel_names} متصل شد؛ پروفایل و اطلاعات اصلی همگام شدند.",
                 "success",
