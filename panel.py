@@ -836,29 +836,34 @@ def channels_discover_related(channel_id: int):
         discovered = discover_related_channels(channel_id)
         discovered_ids = {channel.youtube_channel_id for channel in discovered}
         new_count = len(discovered_ids - before_ids)
-        if len(discovered) > 1:
+        if len(discovered) > 1 or new_count:
             flash(
-                f"{len(discovered)} کانال با مجوز Google مربوط به «{source_title}» شناسایی شد؛ "
+                f"{len(discovered)} کانال با همین مجوز Google شناسایی شد؛ "
                 f"{new_count} کانال جدید به پنل اضافه شد.",
                 "success",
             )
-        elif new_count:
-            flash("یک کانال جدید شناسایی و اضافه شد.", "success")
-        else:
-            flash(
-                "کانال دیگری با همین OAuth credential برگردانده نشد. "
-                "اگر Brand Channel دیگری داری، ممکن است Google هنگام OAuth نیاز به انتخاب همان Channel داشته باشد.",
-                "warning",
+            _audit(
+                "panel",
+                "related_channels_discovered",
+                f"source_channel_id={channel_id}; discovered={len(discovered)}; new={new_count}",
             )
-        _audit(
-            "panel",
-            "related_channels_discovered",
-            f"source_channel_id={channel_id}; discovered={len(discovered)}; new={new_count}",
+            return redirect(url_for("channels"))
+
+        url, state = build_authorization_url(_oauth_redirect_uri(), select_account=True)
+        session["oauth_state"] = state
+        session["oauth_label"] = ""
+        session["oauth_mode"] = "subchannel"
+        session["oauth_parent_channel_id"] = channel_id
+        flash(
+            f"Google برای «{source_title}» فقط یک Channel identity برگرداند. "
+            "الان از صفحه Google یک Channel / Brand Account دیگرِ همین حساب را انتخاب کن.",
+            "warning",
         )
+        return redirect(url)
     except Exception as exc:
         logger.exception("Related YouTube channel discovery failed for channel %s", channel_id)
-        flash(f"اسکن کانال‌های زیرمجموعه ناموفق بود: {exc}", "danger")
-    return redirect(url_for("channels"))
+        flash(f"شناسایی کانال‌های زیرمجموعه ناموفق بود: {exc}", "danger")
+        return redirect(url_for("channels"))
 
 
 @app.route("/channels/<int:channel_id>", methods=["GET", "POST"])
