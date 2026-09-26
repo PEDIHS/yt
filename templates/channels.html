@@ -32,11 +32,11 @@
   <div class="yt-connect-info">
     <span class="section-kicker">ADD NEW ACCOUNT</span>
     <h2>اتصال اکانت یا Brand Channel جدید</h2>
-    <p>بعد از ورود Google، اطلاعات کانال از YouTube API دریافت و credential هر کانال جداگانه و رمزنگاری‌شده ذخیره می‌شود.</p>
+    <p>بعد از ورود Google، همه کانال‌هایی که همان OAuth به آن‌ها دسترسی داشته باشد شناسایی می‌شوند و هرکدام به‌صورت یک Channel مستقل با Queue، Analytics و Studio جدا ثبت می‌شوند.</p>
     <div class="yt-connect-steps">
       <div><span>1</span><strong>OAuth Client</strong><small>Web Application با callback صحیح</small></div>
-      <div><span>2</span><strong>Google Login</strong><small>اکانت یا Brand Channel را انتخاب کن</small></div>
-      <div><span>3</span><strong>Auto Sync</strong><small>پروفایل و آمار خودکار وارد می‌شود</small></div>
+      <div><span>2</span><strong>Google Login</strong><small>اکانت Google را Authorize کن</small></div>
+      <div><span>3</span><strong>Discover Channels</strong><small>کانال‌های قابل دسترس جداگانه وارد می‌شوند</small></div>
     </div>
   </div>
 
@@ -157,6 +157,10 @@
       </div>
       <div class="yt-card-actions">
         <a class="btn btn-primary" href="{{ url_for('channel_detail', channel_id=channel.id, days=28) }}"><i data-lucide="layout-dashboard"></i> مدیریت کانال</a>
+        <form method="post" action="{{ url_for('channels_discover_related', channel_id=channel.id) }}" class="yt-related-scan-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-soft" type="submit" title="شناسایی کانال‌های دیگری که همین Google OAuth به آن‌ها دسترسی دارد"><i data-lucide="scan-search"></i> اسکن زیرچنل‌ها</button>
+        </form>
         <a class="btn btn-soft" href="{{ url_for('missions_page', channel_id=channel.id) }}"><i data-lucide="target"></i> Mission</a>
       </div>
     </div>
