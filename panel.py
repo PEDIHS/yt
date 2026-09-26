@@ -68,6 +68,8 @@ from youtube import (
     build_authorization_url,
     channel_authorization_state,
     connect_channel,
+    connect_channels,
+    discover_related_channels,
     create_playlist,
     create_channel_section,
     delete_caption,
@@ -736,9 +738,10 @@ def oauth_callback():
     try:
         flow = oauth_flow(_oauth_redirect_uri(), state=expected_state)
         flow.fetch_token(authorization_response=request.url)
-        channel = connect_channel(flow.credentials, session.get("oauth_label", "YouTube Channel"))
         mode = session.get("oauth_mode")
+
         if mode == "telegram":
+            channel = connect_channel(flow.credentials, session.get("oauth_label", "YouTube Channel"))
             token = session.get("oauth_request_token")
             with SessionLocal() as db:
                 req = db.query(OAuthRequest).filter_by(token=token).one_or_none()
@@ -754,33 +757,108 @@ def oauth_callback():
             session.pop("oauth_request_token", None)
             session.pop("oauth_state", None)
             return render_template("oauth_success.html", channel=channel, message=message)
-        try:
-            sync_channel_analytics(channel.id, 28)
-            flash(f"کانال «{channel.title}» متصل شد؛ پروفایل، Subscribers، Views، Videos و Analytics همگام شدند.", "success")
-            analytics_synced = True
-        except Exception as analytics_exc:
-            logger.warning("Initial analytics sync failed for channel %s: %s", channel.id, analytics_exc)
-            flash(f"کانال «{channel.title}» متصل شد و اطلاعات پروفایل دریافت شد؛ Analytics را می‌توانی بعداً Sync کنی.", "warning")
-            analytics_synced = False
+
+        connected_channels = connect_channels(
+            flow.credentials,
+            session.get("oauth_label", "YouTube Channel"),
+        )
+        analytics_synced = 0
+        analytics_failed = 0
+        resumed_jobs: list[int] = []
+        for channel in connected_channels:
+            try:
+                sync_channel_analytics(channel.id, 28)
+                analytics_synced += 1
+            except Exception as analytics_exc:
+                analytics_failed += 1
+                logger.warning(
+                    "Initial analytics sync failed for channel %s: %s",
+                    channel.id,
+                    analytics_exc,
+                )
+            resumed_jobs.extend(resume_reauth_jobs_for_channel(channel.id))
+
         session.pop("oauth_state", None)
         session.pop("oauth_label", None)
         session.pop("oauth_mode", None)
-        resumed = resume_reauth_jobs_for_channel(channel.id)
+
+        channel_names = "، ".join(f"«{channel.title}»" for channel in connected_channels[:5])
+        extra_count = max(0, len(connected_channels) - 5)
+        if extra_count:
+            channel_names += f" و {extra_count} کانال دیگر"
+        if len(connected_channels) == 1:
+            flash(
+                f"کانال {channel_names} متصل شد؛ پروفایل و اطلاعات اصلی همگام شدند.",
+                "success",
+            )
+        else:
+            flash(
+                f"{len(connected_channels)} کانال زیرمجموعه این Google Account شناسایی و جداگانه ثبت شدند: {channel_names}",
+                "success",
+            )
+        if analytics_failed:
+            flash(
+                f"Analytics برای {analytics_synced} کانال Sync شد و برای {analytics_failed} کانال بعداً قابل Sync است.",
+                "warning",
+            )
+
         _audit(
             "panel",
-            "channel_connected",
-            f"channel_id={channel.id}; analytics_synced={analytics_synced}; resumed_jobs={resumed}",
+            "google_account_channels_connected",
+            "channel_ids="
+            + ",".join(str(channel.id) for channel in connected_channels)
+            + f"; analytics_synced={analytics_synced}; analytics_failed={analytics_failed}; resumed_jobs={resumed_jobs}",
         )
-        if resumed:
+        if resumed_jobs:
             flash(
                 "Jobهای متوقف‌شده به‌خاطر OAuth به‌صورت خودکار ادامه داده شدند: "
-                + ", ".join(f"#{job_id}" for job_id in resumed),
+                + ", ".join(f"#{job_id}" for job_id in resumed_jobs),
                 "success",
             )
         return redirect(url_for("channels"))
     except Exception as exc:
         logger.exception("OAuth callback failed")
         return render_template("oauth_error.html", message=str(exc)), 400
+
+
+@app.post("/channels/<int:channel_id>/discover-related")
+@login_required
+def channels_discover_related(channel_id: int):
+    require_csrf()
+    with SessionLocal() as db:
+        source = db.get(YouTubeChannel, channel_id)
+        if not source:
+            return "Channel not found", 404
+        before_ids = {row.youtube_channel_id for row in db.query(YouTubeChannel).all()}
+        source_title = source.title
+
+    try:
+        discovered = discover_related_channels(channel_id)
+        discovered_ids = {channel.youtube_channel_id for channel in discovered}
+        new_count = len(discovered_ids - before_ids)
+        if len(discovered) > 1:
+            flash(
+                f"{len(discovered)} کانال با مجوز Google مربوط به «{source_title}» شناسایی شد؛ "
+                f"{new_count} کانال جدید به پنل اضافه شد.",
+                "success",
+            )
+        elif new_count:
+            flash("یک کانال جدید شناسایی و اضافه شد.", "success")
+        else:
+            flash(
+                "کانال دیگری با همین OAuth credential برگردانده نشد. "
+                "اگر Brand Channel دیگری داری، ممکن است Google هنگام OAuth نیاز به انتخاب همان Channel داشته باشد.",
+                "warning",
+            )
+        _audit(
+            "panel",
+            "related_channels_discovered",
+            f"source_channel_id={channel_id}; discovered={len(discovered)}; new={new_count}",
+        )
+    except Exception as exc:
+        logger.exception("Related YouTube channel discovery failed for channel %s", channel_id)
+        flash(f"اسکن کانال‌های زیرمجموعه ناموفق بود: {exc}", "danger")
+    return redirect(url_for("channels"))
 
 
 @app.route("/channels/<int:channel_id>", methods=["GET", "POST"])
