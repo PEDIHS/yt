@@ -617,3 +617,5 @@ input,textarea,select{line-height:1.8}
   .ig-route-form{grid-template-columns:1fr}.ig-route-form .btn{width:100%}
   .ig-group-empty{grid-template-columns:auto minmax(0,1fr)}.ig-group-empty form{grid-column:1/-1}.ig-group-empty form .btn{width:100%}
 }
+.yt-related-scan-form{display:inline-flex}
+@media(max-width:680px){.yt-related-scan-form,.yt-related-scan-form .btn{width:100%}}
