@@ -63,13 +63,13 @@ def oauth_flow(redirect_uri: str, state: Optional[str] = None) -> Flow:
     return flow
 
 
-def build_authorization_url(redirect_uri: str) -> tuple[str, str]:
+def build_authorization_url(redirect_uri: str, *, select_account: bool = False) -> tuple[str, str]:
     state = secrets.token_urlsafe(32)
     flow = oauth_flow(redirect_uri, state=state)
     url, returned_state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
-        prompt="consent",
+        prompt="consent select_account" if select_account else "consent",
     )
     return url, returned_state
 
