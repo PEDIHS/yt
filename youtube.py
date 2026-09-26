@@ -82,15 +82,10 @@ def youtube_analytics_service(credentials: Credentials):
     return build("youtubeAnalytics", "v2", credentials=credentials, cache_discovery=False)
 
 
-def _channel_payload(service) -> dict:
-    response = service.channels().list(part="snippet,statistics,status,contentDetails", mine=True).execute()
-    items = response.get("items", [])
-    if not items:
-        raise RuntimeError("No YouTube channel is available for this Google account")
-    item = items[0]
-    snippet = item.get("snippet", {})
-    stats = item.get("statistics", {})
-    thumbnails = snippet.get("thumbnails", {})
+def _channel_payload_from_item(item: dict) -> dict:
+    snippet = item.get("snippet", {}) or {}
+    stats = item.get("statistics", {}) or {}
+    thumbnails = snippet.get("thumbnails", {}) or {}
     thumb = (thumbnails.get("high") or thumbnails.get("medium") or thumbnails.get("default") or {}).get("url")
     return {
         "youtube_channel_id": item["id"],
@@ -105,38 +100,106 @@ def _channel_payload(service) -> dict:
     }
 
 
-def connect_channel(credentials: Credentials, label: str) -> YouTubeChannel:
+def _channel_payloads(service) -> list[dict]:
+    payloads: list[dict] = []
+    seen: set[str] = set()
+    page_token: str | None = None
+    while True:
+        kwargs = {
+            "part": "snippet,statistics,status,contentDetails",
+            "mine": True,
+            "maxResults": 50,
+        }
+        if page_token:
+            kwargs["pageToken"] = page_token
+        response = service.channels().list(**kwargs).execute()
+        for item in response.get("items", []) or []:
+            channel_id = str(item.get("id") or "").strip()
+            if not channel_id or channel_id in seen:
+                continue
+            seen.add(channel_id)
+            payloads.append(_channel_payload_from_item(item))
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+    if not payloads:
+        raise RuntimeError("No YouTube channel is available for this Google account")
+    return payloads
+
+
+def _channel_payload(service) -> dict:
+    return _channel_payloads(service)[0]
+
+
+def _channel_payload_by_id(service, youtube_channel_id: str) -> dict:
+    response = service.channels().list(
+        part="snippet,statistics,status,contentDetails",
+        id=youtube_channel_id,
+        maxResults=1,
+    ).execute()
+    items = response.get("items", []) or []
+    if not items:
+        raise RuntimeError("This OAuth credential no longer has access to the selected YouTube channel")
+    return _channel_payload_from_item(items[0])
+
+
+def connect_channels(credentials: Credentials, label: str = "") -> list[YouTubeChannel]:
     service = youtube_data_service(credentials)
-    payload = _channel_payload(service)
+    payloads = _channel_payloads(service)
     token_encrypted = encrypt_secret(credentials.to_json())
-    channel_values = {k: v for k, v in payload.items() if k != "uploads_playlist_id"}
+    connected: list[YouTubeChannel] = []
+    single_label = (label or "").strip()[:120] if len(payloads) == 1 else ""
 
     with SessionLocal() as db:
-        channel = db.query(YouTubeChannel).filter_by(youtube_channel_id=payload["youtube_channel_id"]).one_or_none()
-        if channel is None:
-            channel = YouTubeChannel(
-                label=(label or payload["title"]).strip()[:120],
-                token_encrypted=token_encrypted,
-                default_hashtags=Config.DEFAULT_HASHTAGS,
-                default_privacy="public",
-                **channel_values,
-            )
-            db.add(channel)
-        else:
-            channel.label = (label or channel.label).strip()[:120]
-            channel.token_encrypted = token_encrypted
-            channel.title = payload["title"]
-            channel.custom_url = payload["custom_url"]
-            channel.description = payload["description"]
-            channel.thumbnail_url = payload["thumbnail_url"]
-            channel.subscriber_count = payload["subscriber_count"]
-            channel.view_count = payload["view_count"]
-            channel.video_count = payload["video_count"]
-            channel.is_active = True
-        channel.last_synced_at = datetime.utcnow()
+        for payload in payloads:
+            channel_values = {k: v for k, v in payload.items() if k != "uploads_playlist_id"}
+            channel = db.query(YouTubeChannel).filter_by(
+                youtube_channel_id=payload["youtube_channel_id"]
+            ).one_or_none()
+            if channel is None:
+                channel = YouTubeChannel(
+                    label=(single_label or payload["title"]).strip()[:120],
+                    token_encrypted=token_encrypted,
+                    default_hashtags=Config.DEFAULT_HASHTAGS,
+                    default_privacy="public",
+                    **channel_values,
+                )
+                db.add(channel)
+            else:
+                if single_label:
+                    channel.label = single_label
+                channel.token_encrypted = token_encrypted
+                channel.title = payload["title"]
+                channel.custom_url = payload["custom_url"]
+                channel.description = payload["description"]
+                channel.thumbnail_url = payload["thumbnail_url"]
+                channel.subscriber_count = payload["subscriber_count"]
+                channel.view_count = payload["view_count"]
+                channel.video_count = payload["video_count"]
+                channel.is_active = True
+            channel.last_synced_at = datetime.utcnow()
+            db.flush()
+            connected.append(channel)
+
         db.commit()
-        db.refresh(channel)
-        return channel
+        for channel in connected:
+            db.refresh(channel)
+        return connected
+
+
+def connect_channel(credentials: Credentials, label: str) -> YouTubeChannel:
+    return connect_channels(credentials, label)[0]
+
+
+def discover_related_channels(channel_id: int) -> list[YouTubeChannel]:
+    with SessionLocal() as db:
+        channel = db.get(YouTubeChannel, channel_id)
+        if not channel:
+            raise RuntimeError("Channel not found")
+        credentials = credentials_for_channel(db, channel)
+        db.commit()
+    return connect_channels(credentials)
+
 
 
 def credentials_for_channel(db, channel: YouTubeChannel) -> Credentials:
@@ -182,7 +245,7 @@ def refresh_channel(channel_id: int) -> YouTubeChannel:
         if not channel:
             raise RuntimeError("Channel not found")
         creds = credentials_for_channel(db, channel)
-        payload = _channel_payload(youtube_data_service(creds))
+        payload = _channel_payload_by_id(youtube_data_service(creds), channel.youtube_channel_id)
         channel.title = payload["title"]
         channel.custom_url = payload["custom_url"]
         channel.description = payload["description"]
