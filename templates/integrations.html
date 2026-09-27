@@ -75,6 +75,77 @@
     {% endif %}
   </article>
 
+  <article class="glass-card integration-card" id="reporting-center">
+    <div class="integration-head">
+      <div class="integration-icon telegram"><i data-lucide="message-square-text"></i></div>
+      <div class="grow">
+        <span class="section-kicker">REPORTING CENTER</span>
+        <h2>گروه گزارشات حرفه‌ای</h2>
+        <p>یک Supergroup با Topics معرفی کن؛ ربات Topicهای سیستمی و Topic جدا برای هر کانال را می‌سازد و رویدادهای سیستم را دسته‌بندی می‌کند.</p>
+      </div>
+      <span class="scope-badge {{ 'ok' if reporting.configured else 'warn' }}">
+        <i data-lucide="{{ 'circle-check' if reporting.configured else 'triangle-alert' }}"></i>
+        {{ 'Configured' if reporting.configured else 'Not configured' }}
+      </span>
+    </div>
+
+    {% if reporting.configured %}
+    <div class="tg-connected-card">
+      <div class="tg-connected-main">
+        <div class="tg-bot-avatar"><i data-lucide="messages-square"></i><span class="status-orb"></span></div>
+        <div class="grow">
+          <span class="section-kicker">ACTIVE REPORT GROUP</span>
+          <h3>{{ reporting.title or 'Telegram Reporting Group' }}</h3>
+          <p><span class="mono">{{ reporting.group_id }}</span> · گزارش‌های انتشار، پردازش، اتصال‌ها، Instagram، Copyright، خطاها و گزارش روزانه.</p>
+        </div>
+      </div>
+      <div class="tg-status-grid">
+        <div><i data-lucide="layout-list"></i><span>Topics</span><strong>{{ reporting.topic_count }}</strong></div>
+        <div><i data-lucide="layers-3"></i><span>System</span><strong>{{ reporting.system_topic_count }}</strong></div>
+        <div><i data-lucide="youtube"></i><span>Channels</span><strong>{{ reporting.channel_topic_count }}</strong></div>
+      </div>
+      {% if reporting.last_sync_at %}
+      <div class="ig-security-strip">
+        <div class="ig-security-copy">
+          <span class="ig-security-icon"><i data-lucide="refresh-cw"></i></span>
+          <div><strong>آخرین بروزرسانی Topicها</strong><small>{{ reporting.last_sync_at }} UTC</small></div>
+        </div>
+      </div>
+      {% endif %}
+      {% if reporting.last_error %}
+      <div class="ig-security-strip">
+        <div class="ig-security-copy">
+          <span class="ig-security-icon"><i data-lucide="triangle-alert"></i></span>
+          <div><strong>آخرین خطای گزارش‌دهی</strong><small>{{ reporting.last_error }}</small></div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('integrations_reporting') }}" class="form-grid one integration-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>آیدی عددی گروه گزارشات
+        <input type="text" name="group_id" inputmode="numeric" pattern="-?[0-9]+" placeholder="-1001234567890" value="{{ reporting.group_id or '' }}" required>
+        <span class="hint">گروه باید Supergroup باشد، Topics فعال باشد و Bot با دسترسی Manage Topics ادمین شده باشد.</span>
+      </label>
+      <button class="btn btn-primary"><i data-lucide="shield-check"></i> بررسی دسترسی و ساخت Reporting Center</button>
+    </form>
+
+    {% if reporting.configured %}
+    <div class="ig-account-actions">
+      <form method="post" action="{{ url_for('integrations_reporting_sync') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-soft"><i data-lucide="refresh-cw"></i> Update Topics</button>
+      </form>
+      <form method="post" action="{{ url_for('integrations_reporting_disconnect') }}" onsubmit="return confirm('اتصال گروه گزارشات از پنل حذف شود؟')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-danger"><i data-lucide="unlink"></i> قطع Reporting Center</button>
+      </form>
+    </div>
+    {% endif %}
+  </article>
+
   <article class="glass-card integration-card">
     <div class="integration-head">
       <div class="integration-icon instagram"><i data-lucide="instagram"></i></div>
