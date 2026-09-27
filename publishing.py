@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import random
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,8 @@ _peak_analysis_inflight: set[int] = set()
 _long_preparation_inflight: set[int] = set()
 
 DEFAULT_PEAK_HOURS = [12, 15, 18, 21, 23]
+DEFAULT_MINIMUM_GAP_MINUTES = 120
+_slot_random = random.SystemRandom()
 
 
 def _utcnow() -> datetime:
@@ -96,7 +99,7 @@ def update_publishing_config(
     manual_slots: list[int] | None = None,
 ) -> dict:
     videos_per_day = max(1, min(12, int(videos_per_day or 1)))
-    minimum_gap_minutes = max(30, min(720, int(minimum_gap_minutes or 180)))
+    minimum_gap_minutes = max(30, min(720, int(minimum_gap_minutes or DEFAULT_MINIMUM_GAP_MINUTES)))
     allowed_start_hour = max(0, min(23, int(allowed_start_hour)))
     allowed_end_hour = max(0, min(23, int(allowed_end_hour)))
     if allowed_end_hour <= allowed_start_hour:
@@ -337,6 +340,101 @@ def _existing_local_slots(db, channel_id: int, tz: ZoneInfo, local_date) -> list
     return values
 
 
+def _adaptive_candidate_weight(candidate_local: datetime, slot_rows: list[dict]) -> float:
+    """Blend historical peak preference with minute-level variation."""
+    if not slot_rows:
+        return 1.0
+    positive_scores = [max(0.0, float(row.get("score", 0) or 0)) for row in slot_rows]
+    max_score = max(positive_scores or [0.0])
+    best = 1.0
+    for row in slot_rows:
+        hour = int(row.get("hour", candidate_local.hour))
+        peak = candidate_local.replace(hour=hour, minute=0, second=0, microsecond=0)
+        distance_minutes = abs((candidate_local - peak).total_seconds()) / 60.0
+        closeness = max(0.0, 1.0 - (distance_minutes / 105.0))
+        raw_score = max(0.0, float(row.get("score", 0) or 0))
+        quality = (raw_score / max_score) if max_score > 0 else 0.45
+        best = max(best, 1.0 + closeness * (1.15 + quality * 1.85))
+    return best
+
+
+def _adaptive_day_candidates(
+    cfg: ChannelPublishingConfig,
+    tz: ZoneInfo,
+    date_local,
+    existing: list[datetime],
+    local_now: datetime,
+    slot_rows: list[dict],
+) -> list[tuple[datetime, float]]:
+    window_start = datetime(
+        date_local.year,
+        date_local.month,
+        date_local.day,
+        int(cfg.allowed_start_hour),
+        0,
+        tzinfo=tz,
+    )
+    window_end = datetime(
+        date_local.year,
+        date_local.month,
+        date_local.day,
+        int(cfg.allowed_end_hour),
+        0,
+        tzinfo=tz,
+    )
+    if window_end <= window_start:
+        return []
+
+    # Keep posts away from rigid boundary times when the window is wide enough.
+    total_window_minutes = int((window_end - window_start).total_seconds() // 60)
+    edge_padding = 7 if total_window_minutes >= 180 else 0
+    usable_start = window_start + timedelta(minutes=edge_padding)
+    usable_end = window_end - timedelta(minutes=edge_padding)
+    if usable_end <= usable_start:
+        usable_start, usable_end = window_start, window_end
+
+    desired = max(1, int(cfg.videos_per_day or 1))
+    slot_index = min(len(existing), desired - 1)
+    usable_minutes = max(1, int((usable_end - usable_start).total_seconds() // 60))
+    lane_minutes = usable_minutes / desired
+
+    # Spread each day's uploads into different parts of the allowed window.
+    lane_start = usable_start + timedelta(minutes=int(lane_minutes * slot_index))
+    lane_end = (
+        usable_end
+        if slot_index >= desired - 1
+        else usable_start + timedelta(minutes=int(lane_minutes * (slot_index + 1)))
+    )
+    overlap = min(25, max(0, int(lane_minutes * 0.18)))
+    lane_start = max(usable_start, lane_start - timedelta(minutes=overlap))
+    lane_end = min(usable_end, lane_end + timedelta(minutes=overlap))
+
+    def valid(candidate: datetime) -> bool:
+        if candidate <= local_now + timedelta(minutes=5):
+            return False
+        return not any(
+            abs((candidate - other).total_seconds()) < cfg.minimum_gap_minutes * 60
+            for other in existing
+        )
+
+    candidates: list[tuple[datetime, float]] = []
+    cursor = lane_start.replace(second=0, microsecond=0)
+    while cursor <= lane_end:
+        if valid(cursor):
+            candidates.append((cursor, _adaptive_candidate_weight(cursor, slot_rows)))
+        cursor += timedelta(minutes=1)
+
+    # If the preferred lane is exhausted (for example a job arrives late),
+    # use any valid minute still left in the configured window.
+    if not candidates:
+        cursor = usable_start.replace(second=0, microsecond=0)
+        while cursor <= usable_end:
+            if valid(cursor):
+                candidates.append((cursor, _adaptive_candidate_weight(cursor, slot_rows)))
+            cursor += timedelta(minutes=1)
+    return candidates
+
+
 def next_smart_slot(channel_id: int, *, after_utc: datetime | None = None) -> tuple[datetime, float, str]:
     after_utc = after_utc or _utcnow()
     if after_utc.tzinfo is None:
@@ -356,19 +454,6 @@ def next_smart_slot(channel_id: int, *, after_utc: datetime | None = None) -> tu
         slot_rows = _slot_hours(cfg)
         if not slot_rows:
             slot_rows = [{"hour": 18, "score": 0.0, "samples": 0}]
-        ranked = sorted(slot_rows, key=lambda row: row["score"], reverse=True)
-        desired = max(1, cfg.videos_per_day)
-        selected = ranked[:desired]
-        existing_hours = {int(row["hour"]) for row in selected}
-        step_hours = max(1, math.ceil(cfg.minimum_gap_minutes / 60))
-        for hour in range(cfg.allowed_start_hour, cfg.allowed_end_hour + 1, step_hours):
-            if len(selected) >= desired:
-                break
-            if hour in existing_hours:
-                continue
-            selected.append({"hour": hour, "score": 0.0, "samples": 0})
-            existing_hours.add(hour)
-        best_for_day = sorted(selected, key=lambda row: row["hour"])
 
         local_now = after_aware.astimezone(tz)
         for offset in range(0, 21):
@@ -377,28 +462,28 @@ def next_smart_slot(channel_id: int, *, after_utc: datetime | None = None) -> tu
             if len(existing) >= cfg.videos_per_day:
                 continue
 
-            for row in best_for_day:
-                candidate_local = datetime(
-                    date_local.year,
-                    date_local.month,
-                    date_local.day,
-                    int(row["hour"]),
-                    0,
-                    tzinfo=tz,
-                )
-                if candidate_local <= local_now + timedelta(minutes=5):
-                    continue
-                if any(
-                    abs((candidate_local - other).total_seconds()) < cfg.minimum_gap_minutes * 60
-                    for other in existing
-                ):
-                    continue
-                candidate_utc = candidate_local.astimezone(timezone.utc).replace(tzinfo=None)
-                reason = (
-                    f"Smart slot {candidate_local.strftime('%Y-%m-%d %H:%M')} {cfg.timezone}; "
-                    f"historical score={float(row['score']):.2f}; samples={int(row['samples'])}"
-                )
-                return candidate_utc, float(row["score"]), reason
+            candidates = _adaptive_day_candidates(
+                cfg,
+                tz,
+                date_local,
+                existing,
+                local_now,
+                slot_rows,
+            )
+            if not candidates:
+                continue
+
+            times = [row[0] for row in candidates]
+            weights = [max(0.05, row[1]) for row in candidates]
+            candidate_local = _slot_random.choices(times, weights=weights, k=1)[0]
+            score = _adaptive_candidate_weight(candidate_local, slot_rows)
+            candidate_utc = candidate_local.astimezone(timezone.utc).replace(tzinfo=None)
+            reason = (
+                f"Adaptive varied slot {candidate_local.strftime('%Y-%m-%d %H:%M')} {cfg.timezone}; "
+                f"window={cfg.allowed_start_hour:02d}:00-{cfg.allowed_end_hour:02d}:00; "
+                f"minimum_gap={cfg.minimum_gap_minutes}m; weight={score:.2f}"
+            )
+            return candidate_utc, score, reason
 
     raise RuntimeError("No publishing slot is available in the next 21 days")
 
