@@ -677,6 +677,7 @@ def extract_shared_media(item: dict) -> dict | None:
         "media_share",
         "reel_share",
         "clip",
+        "xma_clip",
         "xma_media_share",
         "link",
         "text",
