@@ -108,51 +108,51 @@ def resolve_instagram_cookie_blob() -> str:
 
 
 def instagram_direct_health() -> dict:
+    """Return watcher state without making an Instagram request.
+
+    Connection verification happens explicitly when credentials are saved and
+    the background watcher is the only periodic Direct reader.
+    """
     sessionid = resolve_instagram_session()
     if not sessionid:
         return {"ok": False, "status": "not_configured", "detail": "Instagram session is not configured"}
 
-    cookies = {}
-    raw = resolve_instagram_cookie_blob() or ""
-    for _domain, _include_subdomains, _path, _secure, _expires, name, value in _instagram_cookie_rows(raw):
-        cookies[name] = value
-    if not cookies.get("sessionid"):
-        cookies["sessionid"] = sessionid
+    pause_until_raw = get_secret("instagram_direct_pause_until")
+    pause_reason = get_secret("instagram_direct_pause_reason")
+    runtime_status = get_secret("instagram_direct_runtime_status") or "configured"
+    last_success_at = get_secret("instagram_direct_last_success_at")
+    last_error = get_secret("instagram_direct_last_error")
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "X-IG-App-ID": "936619743392459",
-        "X-CSRFToken": cookies.get("csrftoken", ""),
-        "X-Requested-With": "XMLHttpRequest",
-        "Referer": "https://www.instagram.com/direct/inbox/",
-    }
-    try:
-        response = httpx.get(
-            "https://www.instagram.com/api/v1/direct_v2/inbox/",
-            params={"persistentBadging": "true", "use_unified_inbox": "true", "limit": "1"},
-            headers=headers,
-            cookies=cookies,
-            follow_redirects=False,
-            timeout=8,
-        )
-    except Exception as exc:
-        return {"ok": False, "status": "unreachable", "detail": str(exc)[:160]}
+    pause_until = None
+    if pause_until_raw:
+        try:
+            pause_until = datetime.fromisoformat(pause_until_raw)
+        except ValueError:
+            pause_until = None
 
-    if response.status_code == 200:
+    if pause_until and pause_until > datetime.utcnow():
+        return {
+            "ok": False,
+            "status": runtime_status if runtime_status != "ready" else "paused",
+            "detail": pause_reason or last_error or "Instagram watcher is temporarily paused",
+            "pause_until": pause_until.isoformat(),
+            "last_success_at": last_success_at or None,
+        }
+
+    if runtime_status == "ready":
         return {
             "ok": True,
             "status": "ready",
-            "cookie_count": len(cookies),
-            "full_cookie_set": len(cookies) >= 6,
+            "detail": "",
+            "last_success_at": last_success_at or None,
         }
-    if response.status_code in {301, 302, 303, 307, 308}:
-        location = response.headers.get("location", "")
-        if "login" in location:
-            return {"ok": False, "status": "expired", "detail": "Instagram session expired", "cookie_count": len(cookies)}
-    if response.status_code in {401, 403}:
-        return {"ok": False, "status": "expired", "detail": f"Instagram rejected session ({response.status_code})", "cookie_count": len(cookies)}
-    return {"ok": False, "status": "error", "detail": f"Instagram returned HTTP {response.status_code}", "cookie_count": len(cookies)}
+
+    return {
+        "ok": False,
+        "status": runtime_status,
+        "detail": last_error or "Instagram is configured; waiting for the next watcher cycle",
+        "last_success_at": last_success_at or None,
+    }
 
 
 def instagram_status() -> dict:
