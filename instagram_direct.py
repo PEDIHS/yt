@@ -16,6 +16,7 @@ import httpx
 from db import SessionLocal, init_db
 from integrations import get_secret, resolve_instagram_cookie_blob, resolve_instagram_session, resolve_telegram_token, set_secret
 from models import InstagramDirectGroupRoute, InstagramDirectShare, TelegramAdmin, YouTubeChannel
+from reporting import report_event
 
 logger = logging.getLogger("instagram-direct")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -165,10 +166,27 @@ def _pause_remaining_seconds() -> int:
 
 
 def _clear_runtime_pause() -> None:
+    previous_status = get_secret("instagram_direct_runtime_status")
+    previous_reason = get_secret("instagram_direct_pause_reason")
     set_secret("instagram_direct_pause_until", "")
     set_secret("instagram_direct_pause_reason", "")
     set_secret("instagram_direct_runtime_status", "ready")
     set_secret("instagram_direct_last_error", "")
+    if previous_status in {
+        "challenge_paused",
+        "rate_limited",
+        "auth_paused",
+        "error_backoff",
+    }:
+        report_event(
+            category="instagram",
+            title="Instagram Watcher دوباره فعال شد",
+            severity="success",
+            message=(
+                "چرخه بررسی گروه‌های لینک‌شده بعد از Safety Pause با موفقیت ادامه پیدا کرد."
+                + (f"\nوضعیت قبلی: {previous_reason[:500]}" if previous_reason else "")
+            ),
+        )
 
 
 def _set_runtime_pause(reason: str, seconds_range: tuple[int, int], status: str) -> int:
@@ -182,6 +200,17 @@ def _set_runtime_pause(reason: str, seconds_range: tuple[int, int], status: str)
         "Instagram watcher paused until %s UTC (%s)",
         pause_until.isoformat(timespec="seconds"),
         status,
+    )
+    severity = "critical" if status in {"challenge_paused", "auth_paused"} else "warning"
+    report_event(
+        category="instagram",
+        title="Instagram Watcher متوقف شد",
+        severity=severity,
+        fields={
+            "⏸ وضعیت": status,
+            "⏰ توقف تا": pause_until.isoformat(timespec="seconds") + " UTC",
+        },
+        message=(reason or status)[:1800],
     )
     return seconds
 
@@ -1107,6 +1136,14 @@ def _notify_auto_route_failure(share_id: int, error: str) -> None:
         channel = db.get(YouTubeChannel, share.selected_channel_id) if share.selected_channel_id else None
         channel_name = (channel.label or channel.title) if channel else "Unknown channel"
         title = share.title_hint or share.media_url
+    report_event(
+        category="instagram",
+        title="Auto Route اینستاگرام ناموفق بود",
+        severity="error",
+        channel_id=share.selected_channel_id if share else None,
+        job_id=share.upload_job_id if share else None,
+        message=error[:1800],
+    )
     try:
         httpx.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
@@ -1213,6 +1250,21 @@ def _auto_queue_share(share_id: int) -> bool:
         logger.info(
             "Instagram group share %s routed to channel %s as Job %s at %s",
             share_id, channel_id, job.id, schedule.scheduled_for,
+        )
+        report_event(
+            category="instagram",
+            title="محتوای Instagram وارد صف شد",
+            severity="success",
+            channel_id=channel_id,
+            job_id=job.id,
+            fields={
+                "🎞 نوع": share.media_type if share else "media",
+                "👤 فرستنده": (
+                    f"@{share.sender_username}" if share and share.sender_username
+                    else (share.sender_id if share else "")
+                ),
+            },
+            message=source_url,
         )
         return True
     except Exception as exc:
