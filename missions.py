@@ -11,6 +11,7 @@ from config import Config
 from db import SessionLocal
 from integrations import get_secret, resolve_telegram_token
 from models import ChannelMissionState, ChannelPublishingConfig, TelegramAdmin, YouTubeChannel
+from reporting import report_event
 
 logger = logging.getLogger("missions")
 
@@ -330,7 +331,16 @@ def dispatch_due_mission_reports(now_utc: datetime | None = None) -> int:
 
         try:
             mission = build_channel_mission(channel_id, refresh=True, reference_date=local_now.date())
-            if not _send_telegram(mission_report_text(mission)):
+            report_text = mission_report_text(mission)
+            admin_sent = _send_telegram(report_text)
+            center_sent = report_event(
+                category="analytics",
+                title="گزارش روزانه کانال",
+                severity="info",
+                channel_id=channel_id,
+                message=report_text,
+            )
+            if not admin_sent and not center_sent:
                 continue
             with SessionLocal() as db:
                 state = db.get(ChannelMissionState, channel_id)
@@ -338,7 +348,14 @@ def dispatch_due_mission_reports(now_utc: datetime | None = None) -> int:
                     state.last_report_date = local_date
                     db.commit()
             sent += 1
-        except Exception:
+        except Exception as exc:
             logger.exception("Daily mission report failed for channel %s", channel_id)
+            report_event(
+                category="errors",
+                title="گزارش روزانه کانال ناموفق بود",
+                severity="error",
+                channel_id=channel_id,
+                message=str(exc),
+            )
 
     return sent
