@@ -163,7 +163,7 @@ class ChannelPublishingConfig(Base):
     smart_peak_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     videos_per_day: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Tehran", nullable=False)
-    minimum_gap_minutes: Mapped[int] = mapped_column(Integer, default=180, nullable=False)
+    minimum_gap_minutes: Mapped[int] = mapped_column(Integer, default=120, nullable=False)
     allowed_start_hour: Mapped[int] = mapped_column(Integer, default=9, nullable=False)
     allowed_end_hour: Mapped[int] = mapped_column(Integer, default=23, nullable=False)
     manual_slots_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
