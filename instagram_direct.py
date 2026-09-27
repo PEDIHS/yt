@@ -1159,13 +1159,24 @@ def run_watcher() -> None:
             sleep_seconds = _random.randint(POLL_MIN_SECONDS, POLL_MAX_SECONDS)
         except Exception as exc:
             detail = str(exc)
+            detail_lower = detail.lower()
             logger.warning("Instagram Direct poll failed: %s", detail)
-            if "session expired" in detail.lower() or "login" in detail.lower():
+            if "session expired" in detail_lower or "login" in detail_lower:
                 notify_instagram_disconnect(detail)
-            sleep_seconds = min(
-                300,
-                max(POLL_MIN_SECONDS, int(sleep_seconds * 1.8) + _random.randint(0, 17)),
-            )
+
+            if (
+                "challenge" in detail_lower
+                or "manual verification" in detail_lower
+                or "scraping_warning" in detail_lower
+            ):
+                # A checkpoint should not be hammered. Wait 15-30 minutes
+                # before trying the linked groups again.
+                sleep_seconds = _random.randint(900, 1800)
+            else:
+                sleep_seconds = min(
+                    300,
+                    max(POLL_MIN_SECONDS, int(sleep_seconds * 1.8) + _random.randint(0, 17)),
+                )
         time.sleep(sleep_seconds)
 
 
