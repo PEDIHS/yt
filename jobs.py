@@ -24,6 +24,7 @@ from models import (
     UploadSchedule,
     YouTubeChannel,
 )
+from reporting import report_event
 from security import new_token
 from youtube import (
     discard_preflight_video,
@@ -100,7 +101,15 @@ def _send_telegram_job_event(
         channel_name = (channel.label or channel.title) if channel else f"Channel #{job.channel_id}"
         privacy = job.privacy
 
-    if event == "uploading":
+    if event == "downloading":
+        text = (
+            f"📥 دریافت ویدیو از منبع شروع شد.\n\n"
+            f"🎬 {title}\n"
+            f"📺 {channel_name}\n"
+            f"🧾 Job #{job_id}"
+        )
+        reply_markup = None
+    elif event == "uploading":
         text = (
             f"🚀 ویدیو آماده انتشار است و در حال ارسال به YouTube می‌باشد.\n\n"
             f"🎬 {title}\n"
@@ -195,6 +204,49 @@ def _send_telegram_job_event(
         )
         reply_markup = None
 
+    report_category = {
+        "downloading": "processing",
+        "uploading": "processing",
+        "checking": "processing",
+        "ready_scheduled": "processing",
+        "completed": "publishing",
+        "copyright_blocked": "copyright",
+        "preflight_blocked": "errors",
+        "reauth_required": "connections",
+        "queue_recovered": "queue",
+        "failed": "errors",
+    }.get(event, "errors")
+    report_severity = {
+        "completed": "success",
+        "ready_scheduled": "success",
+        "copyright_blocked": "error",
+        "preflight_blocked": "warning",
+        "reauth_required": "warning",
+        "queue_recovered": "warning",
+        "failed": "error",
+    }.get(event, "info")
+    report_title = {
+        "downloading": "دانلود ویدیو شروع شد",
+        "uploading": "آپلود به YouTube شروع شد",
+        "checking": "بررسی Preflight و Copyright",
+        "ready_scheduled": "ویدیوی Long آماده زمان انتشار است",
+        "completed": "انتشار با موفقیت انجام شد",
+        "copyright_blocked": "انتشار به‌علت Copyright متوقف شد",
+        "preflight_blocked": "Preflight انتشار را متوقف کرد",
+        "reauth_required": "اتصال YouTube نیاز به OAuth مجدد دارد",
+        "queue_recovered": "صف بعد از Block ترمیم شد",
+        "failed": "پردازش/انتشار Job ناموفق بود",
+    }.get(event, "خطای Job")
+    report_event(
+        category=report_category,
+        title=report_title,
+        message=text,
+        severity=report_severity,
+        channel_id=job.channel_id,
+        job_id=job_id,
+        reply_markup=reply_markup,
+    )
+
     for chat_id in _telegram_targets_for_job(job_id):
         payload = {
             "chat_id": chat_id,
@@ -249,7 +301,23 @@ def create_job(
         db.add(job)
         db.commit()
         db.refresh(job)
-        return job
+        created_job_id = job.id
+        created_channel_id = job.channel_id
+        created_title = job.title
+        created_source = job.source
+        created_url = job.source_url
+
+    report_event(
+        category="processing",
+        title="Job جدید ثبت شد",
+        severity="info",
+        channel_id=created_channel_id,
+        job_id=created_job_id,
+        fields={"📥 منبع": created_source, "🎬 عنوان": created_title},
+        message=created_url,
+    )
+    with SessionLocal() as db:
+        return db.get(UploadJob, created_job_id)
 
 
 def configure_long_job(
@@ -505,6 +573,7 @@ def _process_long_job(job_id: int, *, hold_after_check: bool = False) -> dict:
             job.error = None
             db.commit()
 
+        _send_telegram_job_event(job_id, event="downloading")
         file_path, source_metadata = download_external_video(source_url, quality=quality)
         if not file_path:
             raise RuntimeError("Long-form media could not be downloaded")
@@ -946,6 +1015,7 @@ def process_job(job_id: int) -> dict:
             description = job.description
             privacy = job.privacy
 
+        _send_telegram_job_event(job_id, event="downloading")
         capability = publishing_preflight_capability(channel_id)
         if not capability.get("ok"):
             message = (
