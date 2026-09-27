@@ -1137,7 +1137,8 @@ def _notify_auto_route_failure(share_id: int, error: str) -> None:
         channel_id = share.selected_channel_id
         upload_job_id = share.upload_job_id
 
-    report_event(
+    report_group_configured = bool((get_secret("telegram_reporting_group_id") or "").strip())
+    report_sent = report_event(
         category="instagram",
         title="Auto Route اینستاگرام ناموفق بود",
         severity="error",
@@ -1146,6 +1147,10 @@ def _notify_auto_route_failure(share_id: int, error: str) -> None:
         message=error[:1800],
     )
 
+    # Reporting Center owns automatic alerts once configured.
+    # Keep the main admin chat as a fallback only if delivery to the group failed.
+    if report_group_configured and report_sent:
+        return
     if not token or not admin_id:
         return
     try:
@@ -1415,6 +1420,11 @@ def notify_instagram_disconnect(detail: str) -> None:
     global _last_disconnect_alert_at
     now = datetime.utcnow()
     if _last_disconnect_alert_at and now - _last_disconnect_alert_at < timedelta(hours=6):
+        return
+
+    # _set_runtime_pause reports the checkpoint/auth problem to Reporting Center.
+    # Do not duplicate that automatic alert in the main bot when the group is configured.
+    if (get_secret("telegram_reporting_group_id") or "").strip():
         return
 
     token = resolve_telegram_token()
