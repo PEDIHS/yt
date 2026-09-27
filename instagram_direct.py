@@ -1346,6 +1346,7 @@ def run_watcher() -> None:
     init_db()
     logger.info("Instagram linked-group watcher started (10-20 minute adaptive polling)")
     sleep_seconds = _random.randint(POLL_MIN_SECONDS, POLL_MAX_SECONDS)
+    first_cycle = True
 
     while True:
         pause_remaining = _pause_remaining_seconds()
@@ -1353,6 +1354,12 @@ def run_watcher() -> None:
             # Local wait only: no Instagram request is made during the circuit-breaker pause.
             time.sleep(min(60, pause_remaining))
             continue
+
+        if first_cycle:
+            # A service restart must not trigger an immediate Instagram request.
+            logger.info("First Instagram group check scheduled in %s seconds", sleep_seconds)
+            time.sleep(sleep_seconds)
+            first_cycle = False
 
         try:
             count = poll_once()
