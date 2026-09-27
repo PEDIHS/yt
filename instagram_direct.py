@@ -1219,7 +1219,7 @@ def notify_pending_share(share_id: int) -> None:
 def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
     inbox = payload.get("inbox") or payload
     threads = inbox.get("threads", []) if isinstance(inbox, dict) else []
-    candidates: list[tuple[int, dict, str, int]] = []
+    candidates: list[tuple[int, dict, dict, str, int]] = []
 
     with SessionLocal() as db:
         for thread in threads:
@@ -1241,14 +1241,14 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
             for item in thread.get("items", []) or []:
                 media = extract_shared_media(item)
                 if media:
-                    candidates.append((_item_timestamp_value(item), item, thread_id, channel.id))
+                    candidates.append((_item_timestamp_value(item), thread, item, thread_id, channel.id))
 
         # Instagram usually returns newest first. Persist oldest first so the
         # processing queue follows the order in which people sent the Reels.
         candidates.sort(key=lambda row: row[0])
 
         created_ids: list[int] = []
-        for _ts, item, thread_id, auto_channel_id in candidates:
+        for _ts, thread, item, thread_id, auto_channel_id in candidates:
             media = extract_shared_media(item)
             if not media:
                 continue
@@ -1260,10 +1260,7 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
             if exists:
                 continue
 
-            sender_id, sender_username = _sender_for_item(
-                {"thread_id": thread_id, "users": []},
-                item,
-            )
+            sender_id, sender_username = _sender_for_item(thread, item)
             recent_duplicate = db.query(InstagramDirectShare.id).filter(
                 InstagramDirectShare.media_url == media["url"],
                 InstagramDirectShare.sender_id == sender_id[:128],
