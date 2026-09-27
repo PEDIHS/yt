@@ -76,7 +76,7 @@
         <label>Timezone<input name="timezone" value="{{ cfg.get('timezone', 'Asia/Tehran') }}" placeholder="Asia/Tehran"></label>
         <label>شروع بازه مجاز<input type="number" name="allowed_start_hour" min="0" max="23" value="{{ cfg.get('allowed_start_hour', 9) }}"></label>
         <label>پایان بازه مجاز<input type="number" name="allowed_end_hour" min="0" max="23" value="{{ cfg.get('allowed_end_hour', 23) }}"></label>
-        <label>حداقل فاصله (دقیقه)<input type="number" name="minimum_gap_minutes" min="30" max="720" value="{{ cfg.get('minimum_gap_minutes', 180) }}"></label>
+        <label>حداقل فاصله (دقیقه)<input type="number" name="minimum_gap_minutes" min="30" max="720" value="{{ cfg.get('minimum_gap_minutes', 120) }}"></label>
         <label>ساعت‌های دستی<input name="manual_slots" value="{{ cfg.get('manual_slots', [])|join(',') }}" placeholder="12,18,21"></label>
         <label class="toggle-row span-2"><input type="checkbox" name="reschedule_waiting"><span><strong>زمان‌بندی مجدد صف فعلی</strong><small>آیتم‌های Smart منتظر با تنظیمات جدید دوباره Slot می‌گیرند</small></span></label>
         <button class="btn btn-primary span-2"><i data-lucide="save"></i> ذخیره تنظیمات</button>
@@ -144,6 +144,6 @@
 
 <section class="smart-method-note glass-card">
   <i data-lucide="info"></i>
-  <div><strong>Smart Peak چگونه محاسبه می‌شود؟</strong><p>API عمومی YouTube Heatmap ساعتی «بیننده‌ها آنلاین‌اند» را ارائه نمی‌دهد. سیستم از ساعت انتشار ویدیوهای قبلی همان کانال، سرعت View، تعامل، Watch Time و سیگنال‌های Audience برای رتبه‌بندی Slotها استفاده می‌کند؛ بنابراین Confidence با افزایش تاریخچه بهتر می‌شود.</p></div>
+  <div><strong>Smart Peak چگونه محاسبه می‌شود؟</strong><p>API عمومی YouTube Heatmap ساعتی «بیننده‌ها آنلاین‌اند» را ارائه نمی‌دهد. سیستم از عملکرد قبلی کانال برای وزن‌دهی بازه استفاده می‌کند و سپس زمان دقیق را در حد دقیقه داخل بازه مجاز به‌صورت متغیر انتخاب می‌کند؛ حداقل فاصله و سقف روزانه هم همیشه رعایت می‌شوند.</p></div>
 </section>
 {% endblock %}
