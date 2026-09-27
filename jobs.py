@@ -237,7 +237,8 @@ def _send_telegram_job_event(
         "queue_recovered": "صف بعد از Block ترمیم شد",
         "failed": "پردازش/انتشار Job ناموفق بود",
     }.get(event, "خطای Job")
-    report_event(
+    report_group_configured = bool((get_secret("telegram_reporting_group_id") or "").strip())
+    report_sent = report_event(
         category=report_category,
         title=report_title,
         message=text,
@@ -246,6 +247,11 @@ def _send_telegram_job_event(
         job_id=job_id,
         reply_markup=reply_markup,
     )
+
+    # Once Reporting Center is active, lifecycle reports belong there.
+    # Keep the main bot clean; only fall back to the admin chat if group delivery failed.
+    if report_group_configured and report_sent:
+        return
 
     for chat_id in _telegram_targets_for_job(job_id):
         payload = {
