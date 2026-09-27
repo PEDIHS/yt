@@ -85,7 +85,7 @@
       </div>
       <span class="scope-badge {{ 'ok' if instagram_direct.ok else 'warn' }}">
         <i data-lucide="{{ 'circle-check' if instagram_direct.ok else 'triangle-alert' }}"></i>
-        {% if instagram_direct.ok %}Direct Ready{% elif instagram_direct.status == 'expired' %}Expired{% elif instagram.configured %}Reconnect required{% else %}Not configured{% endif %}
+        {% if instagram_direct.ok %}Direct Ready{% elif instagram_direct.status in ['challenge_paused','rate_limited','auth_paused','error_backoff','paused'] %}Paused{% elif instagram_direct.status == 'expired' %}Expired{% elif instagram.configured %}Waiting{% else %}Not configured{% endif %}
       </span>
     </div>
 
@@ -109,7 +109,7 @@
 
         <span class="ig-connected-pill">
           <span class="status-orb"></span>
-          {{ 'Direct Ready' if instagram_direct.ok else 'Reconnect' }}
+          {{ 'Direct Ready' if instagram_direct.ok else 'Paused' if instagram_direct.status in ['challenge_paused','rate_limited','auth_paused','error_backoff','paused'] else 'Waiting' }}
         </span>
       </div>
 
@@ -124,7 +124,7 @@
         </div>
         <div class="ig-metric">
           <span class="ig-metric-icon"><i data-lucide="download-cloud"></i></span>
-          <div><small>Direct Inbox</small><strong>{{ 'Ready' if instagram_direct.ok else 'Expired' if instagram_direct.status == 'expired' else 'Unavailable' }}</strong></div>
+          <div><small>Direct Inbox</small><strong>{{ 'Ready' if instagram_direct.ok else 'Paused' if instagram_direct.status in ['challenge_paused','rate_limited','auth_paused','error_backoff','paused'] else 'Waiting' }}</strong></div>
         </div>
       </div>
 
