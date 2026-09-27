@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import logging
-from concurrent.futures import ThreadPoolExecutor
 import random
 import re
 import threading
@@ -21,7 +20,6 @@ from models import InstagramDirectGroupRoute, InstagramDirectShare, TelegramAdmi
 logger = logging.getLogger("instagram-direct")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 _last_disconnect_alert_at: datetime | None = None
-_ack_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="instagram-ack")
 _private_client_lock = threading.Lock()
 _private_client = None
 _private_client_sessionid: str | None = None
@@ -97,11 +95,16 @@ PLAYWRIGHT_BROWSERS_PATH = os.getenv(
 )
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", PLAYWRIGHT_BROWSERS_PATH)
 
-POLL_SECONDS = 30
-POLL_MIN_SECONDS = 35
-POLL_MAX_SECONDS = 70
-ACK_INITIAL_DELAY_SECONDS = (3.0, 11.0)
-ACK_REPLY_DELAY_SECONDS = (1.5, 5.0)
+POLL_MIN_SECONDS = 10 * 60
+POLL_MAX_SECONDS = 20 * 60
+MAX_ITEMS_PER_CYCLE = 5
+ACK_INITIAL_DELAY_SECONDS = (5.0, 14.0)
+ACK_REPLY_DELAY_SECONDS = (3.0, 8.0)
+BETWEEN_ITEMS_DELAY_SECONDS = (18.0, 45.0)
+CHALLENGE_PAUSE_SECONDS = (8 * 60 * 60, 12 * 60 * 60)
+RATE_LIMIT_PAUSE_SECONDS = (2 * 60 * 60, 4 * 60 * 60)
+AUTH_PAUSE_SECONDS = (3 * 60 * 60, 6 * 60 * 60)
+GENERIC_ERROR_PAUSE_SECONDS = (20 * 60, 40 * 60)
 INBOX_URLS = (
     "https://www.instagram.com/api/v1/direct_v2/inbox/",
     "https://i.instagram.com/api/v1/direct_v2/inbox/",
@@ -142,6 +145,100 @@ def _headers(cookies: dict[str, str]) -> dict[str, str]:
         "X-Requested-With": "XMLHttpRequest",
         "Referer": "https://www.instagram.com/direct/inbox/",
     }
+
+
+def _parse_pause_until() -> datetime | None:
+    raw = get_secret("instagram_direct_pause_until")
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _pause_remaining_seconds() -> int:
+    pause_until = _parse_pause_until()
+    if not pause_until:
+        return 0
+    return max(0, int((pause_until - datetime.utcnow()).total_seconds()))
+
+
+def _clear_runtime_pause() -> None:
+    set_secret("instagram_direct_pause_until", "")
+    set_secret("instagram_direct_pause_reason", "")
+    set_secret("instagram_direct_runtime_status", "ready")
+    set_secret("instagram_direct_last_error", "")
+
+
+def _set_runtime_pause(reason: str, seconds_range: tuple[int, int], status: str) -> int:
+    seconds = _random.randint(int(seconds_range[0]), int(seconds_range[1]))
+    pause_until = datetime.utcnow() + timedelta(seconds=seconds)
+    set_secret("instagram_direct_pause_until", pause_until.isoformat())
+    set_secret("instagram_direct_pause_reason", (reason or status)[:1000])
+    set_secret("instagram_direct_runtime_status", status)
+    set_secret("instagram_direct_last_error", (reason or status)[:2000])
+    logger.warning(
+        "Instagram watcher paused until %s UTC (%s)",
+        pause_until.isoformat(timespec="seconds"),
+        status,
+    )
+    return seconds
+
+
+def _instagram_error_kind(detail: str) -> str:
+    value = (detail or "").lower()
+    if any(token in value for token in (
+        "challenge",
+        "manual verification",
+        "checkpoint",
+        "scraping_warning",
+        "challenge_required",
+    )):
+        return "challenge"
+    if "429" in value or "rate limit" in value or "too many request" in value:
+        return "rate_limited"
+    if any(token in value for token in (
+        "login_required",
+        "session expired",
+        "not authorized",
+        "accounts/login",
+    )):
+        return "auth"
+    return ""
+
+
+def _pause_for_instagram_error(detail: str) -> int:
+    kind = _instagram_error_kind(detail)
+    if kind == "challenge":
+        return _set_runtime_pause(detail, CHALLENGE_PAUSE_SECONDS, "challenge_paused")
+    if kind == "rate_limited":
+        return _set_runtime_pause(detail, RATE_LIMIT_PAUSE_SECONDS, "rate_limited")
+    if kind == "auth":
+        return _set_runtime_pause(detail, AUTH_PAUSE_SECONDS, "auth_paused")
+    return _set_runtime_pause(detail, GENERIC_ERROR_PAUSE_SECONDS, "error_backoff")
+
+
+def _item_timestamp_value(item: dict) -> int:
+    raw = item.get("timestamp") or item.get("taken_at") or 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _item_detected_at(item: dict) -> datetime:
+    value = _item_timestamp_value(item)
+    if value <= 0:
+        return datetime.utcnow()
+    try:
+        if value > 10**14:
+            return datetime.utcfromtimestamp(value / 1_000_000)
+        if value > 10**11:
+            return datetime.utcfromtimestamp(value / 1_000)
+        return datetime.utcfromtimestamp(value)
+    except (OverflowError, OSError, ValueError):
+        return datetime.utcnow()
 
 
 def _reset_private_client() -> None:
@@ -269,11 +366,53 @@ def _send_instagram_reaction(
         raise RuntimeError("Instagram did not confirm the message reaction")
 
 
-def _send_instagram_text_private(thread_id: str, text: str) -> None:
+def _send_instagram_text_private(
+    thread_id: str,
+    text: str,
+    *,
+    reply_to_item_id: str = "",
+    reply_to_client_context: str = "",
+) -> None:
     if not thread_id:
         raise ValueError("Instagram thread id is missing")
+
     client = _instagram_private_client()
-    client.direct_answer(int(thread_id), text)
+    if not reply_to_item_id:
+        client.direct_answer(int(thread_id), text)
+        return
+
+    token = client.generate_mutation_token()
+    payload = {
+        "action": "send_item",
+        "is_x_transport_forward": "false",
+        "send_silently": "false",
+        "is_shh_mode": "0",
+        "send_attribution": "message_button",
+        "client_context": token,
+        "device_id": client.android_device_id,
+        "mutation_token": token,
+        "btt_dual_send": "false",
+        "nav_chain": (
+            "1qT:feed_timeline:1,1qT:feed_timeline:2,1qT:feed_timeline:3,"
+            "7Az:direct_inbox:4,7Az:direct_inbox:5,5rG:direct_thread:7"
+        ),
+        "is_ae_dual_send": "false",
+        "offline_threading_id": token,
+        "thread_ids": json.dumps([int(thread_id)]),
+        "text": text,
+        "replied_to_action_source": "swipe",
+        "replied_to_item_id": str(reply_to_item_id),
+    }
+    if reply_to_client_context:
+        payload["replied_to_client_context"] = str(reply_to_client_context)
+
+    result = client.private_request(
+        "direct_v2/threads/broadcast/text/",
+        data=client.with_default_data(payload),
+        with_signature=False,
+    )
+    if isinstance(result, dict) and result.get("status") not in {None, "ok"}:
+        raise RuntimeError("Instagram did not confirm the direct reply")
 
 
 def fetch_primary_inbox(limit: int = 20) -> dict:
@@ -696,11 +835,25 @@ def _playwright_cookie_list() -> list[dict]:
     return cookies
 
 
-def send_instagram_received_ack(thread_id: str, text: str) -> None:
+def send_instagram_received_ack(
+    thread_id: str,
+    text: str,
+    *,
+    reply_to_item_id: str = "",
+    reply_to_client_context: str = "",
+) -> None:
     try:
-        _send_instagram_text_private(thread_id, text)
+        _send_instagram_text_private(
+            thread_id,
+            text,
+            reply_to_item_id=reply_to_item_id,
+            reply_to_client_context=reply_to_client_context,
+        )
         return
     except Exception as exc:
+        detail = str(exc)
+        if reply_to_item_id or _instagram_error_kind(detail):
+            raise
         logger.warning("Instagram private text send failed; trying browser fallback: %s", exc)
         _reset_private_client()
 
@@ -796,7 +949,6 @@ def _ack_share_safely(
             except Exception:
                 pass
 
-    # Small bounded pacing avoids firing every automated action at the same instant.
     time.sleep(_random.uniform(*ACK_INITIAL_DELAY_SECONDS))
 
     if item_id:
@@ -808,21 +960,75 @@ def _ack_share_safely(
                 client_context=client_context,
                 target_item_type=target_item_type,
             )
-            logger.info(
-                "Instagram reaction %s sent for share %s",
-                reaction_emoji,
-                share_id,
-            )
+            logger.info("Instagram reaction %s sent for share %s", reaction_emoji, share_id)
         except Exception as exc:
-            logger.warning("Instagram reaction failed for share %s: %s", share_id, exc)
+            detail = str(exc)
+            logger.warning("Instagram reaction failed for share %s: %s", share_id, detail)
             _reset_private_client()
+            if _instagram_error_kind(detail):
+                raise
 
     time.sleep(_random.uniform(*ACK_REPLY_DELAY_SECONDS))
     try:
-        send_instagram_received_ack(thread_id, text)
-        logger.info("Instagram acknowledgement sent for share %s", share_id)
+        send_instagram_received_ack(
+            thread_id,
+            text,
+            reply_to_item_id=item_id,
+            reply_to_client_context=client_context,
+        )
+        logger.info("Instagram direct reply sent for share %s", share_id)
     except Exception as exc:
-        logger.warning("Instagram Direct acknowledgement failed for share %s: %s", share_id, exc)
+        detail = str(exc)
+        logger.warning("Instagram Direct reply failed for share %s: %s", share_id, detail)
+        _reset_private_client()
+        if _instagram_error_kind(detail):
+            raise
+
+
+def _process_pending_group_shares(limit: int = MAX_ITEMS_PER_CYCLE) -> int:
+    with SessionLocal() as db:
+        rows = (
+            db.query(InstagramDirectShare.id)
+            .filter(InstagramDirectShare.status == "auto_route_pending")
+            .order_by(
+                InstagramDirectShare.detected_at.asc(),
+                InstagramDirectShare.id.asc(),
+            )
+            .limit(max(1, int(limit)))
+            .all()
+        )
+        share_ids = [int(row[0]) for row in rows]
+
+    processed = 0
+    for index, share_id in enumerate(share_ids):
+        try:
+            _auto_queue_share(share_id)
+        except Exception as exc:
+            detail = str(exc)
+            logger.exception("Instagram group auto route failed for share %s", share_id)
+            if _instagram_error_kind(detail):
+                raise
+            continue
+
+        with SessionLocal() as db:
+            share = db.get(InstagramDirectShare, share_id)
+            thread_id = share.thread_id if share else ""
+            item_id = share.item_id if share else ""
+
+        if thread_id:
+            _ack_share_safely(
+                share_id,
+                thread_id,
+                item_id,
+                _random.choice(ACK_MESSAGES),
+                _random.choice(REACTION_EMOJIS),
+            )
+        processed += 1
+
+        if index < len(share_ids) - 1:
+            time.sleep(_random.uniform(*BETWEEN_ITEMS_DELAY_SECONDS))
+
+    return processed
 
 
 
@@ -1013,8 +1219,7 @@ def notify_pending_share(share_id: int) -> None:
 def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
     inbox = payload.get("inbox") or payload
     threads = inbox.get("threads", []) if isinstance(inbox, dict) else []
-    created_ids: list[int] = []
-    auto_ids: list[int] = []
+    candidates: list[tuple[int, dict, str, int]] = []
 
     with SessionLocal() as db:
         for thread in threads:
@@ -1033,73 +1238,60 @@ def ingest_inbox(payload: dict, *, notify: bool = True) -> int:
             if not channel or not channel.is_active:
                 continue
 
-            auto_channel_id = channel.id
-            items = thread.get("items", []) or []
-            for item in items:
+            for item in thread.get("items", []) or []:
                 media = extract_shared_media(item)
-                if not media:
-                    continue
-                item_id = str(item.get("item_id") or item.get("id") or item.get("client_context") or "")
-                timestamp = str(item.get("timestamp") or "")
-                item_key = item_id or f"{thread_id}:{timestamp}:{media['url']}"
-                exists = db.query(InstagramDirectShare.id).filter_by(item_key=item_key).first()
-                if exists:
-                    continue
+                if media:
+                    candidates.append((_item_timestamp_value(item), item, thread_id, channel.id))
 
-                sender_id, sender_username = _sender_for_item(thread, item)
-                recent_duplicate = db.query(InstagramDirectShare.id).filter(
-                    InstagramDirectShare.media_url == media["url"],
-                    InstagramDirectShare.sender_id == sender_id[:128],
-                    InstagramDirectShare.detected_at >= datetime.utcnow() - timedelta(minutes=10),
-                ).first()
-                if recent_duplicate:
-                    continue
+        # Instagram usually returns newest first. Persist oldest first so the
+        # processing queue follows the order in which people sent the Reels.
+        candidates.sort(key=lambda row: row[0])
 
-                row = InstagramDirectShare(
-                    item_key=item_key[:255],
-                    thread_id=thread_id[:255],
-                    item_id=item_id[:255],
-                    sender_id=sender_id[:128],
-                    sender_username=sender_username[:255],
-                    media_url=media["url"],
-                    media_type=media["media_type"],
-                    title_hint=media["title"][:255],
-                    thumbnail_url=media["thumbnail_url"],
-                    raw_json=json.dumps(item, ensure_ascii=False)[:100000],
-                    status="auto_route_pending" if notify else "ignored_baseline",
-                    selected_channel_id=auto_channel_id,
-                    detected_at=datetime.utcnow(),
-                )
-                db.add(row)
-                db.flush()
-                created_ids.append(row.id)
-                if notify:
-                    auto_ids.append(row.id)
+        created_ids: list[int] = []
+        for _ts, item, thread_id, auto_channel_id in candidates:
+            media = extract_shared_media(item)
+            if not media:
+                continue
+
+            item_id = str(item.get("item_id") or item.get("id") or item.get("client_context") or "")
+            timestamp = str(item.get("timestamp") or "")
+            item_key = item_id or f"{thread_id}:{timestamp}:{media['url']}"
+            exists = db.query(InstagramDirectShare.id).filter_by(item_key=item_key).first()
+            if exists:
+                continue
+
+            sender_id, sender_username = _sender_for_item(
+                {"thread_id": thread_id, "users": []},
+                item,
+            )
+            recent_duplicate = db.query(InstagramDirectShare.id).filter(
+                InstagramDirectShare.media_url == media["url"],
+                InstagramDirectShare.sender_id == sender_id[:128],
+                InstagramDirectShare.detected_at >= datetime.utcnow() - timedelta(minutes=10),
+            ).first()
+            if recent_duplicate:
+                continue
+
+            row = InstagramDirectShare(
+                item_key=item_key[:255],
+                thread_id=thread_id[:255],
+                item_id=item_id[:255],
+                sender_id=sender_id[:128],
+                sender_username=sender_username[:255],
+                media_url=media["url"],
+                media_type=media["media_type"],
+                title_hint=media["title"][:255],
+                thumbnail_url=media["thumbnail_url"],
+                raw_json=json.dumps(item, ensure_ascii=False)[:100000],
+                status="auto_route_pending" if notify else "ignored_baseline",
+                selected_channel_id=auto_channel_id,
+                detected_at=_item_detected_at(item),
+            )
+            db.add(row)
+            db.flush()
+            created_ids.append(row.id)
+
         db.commit()
-
-    if notify:
-        for share_id in auto_ids:
-            try:
-                _auto_queue_share(share_id)
-            except Exception:
-                logger.exception("Instagram group auto route failed for share %s", share_id)
-
-            with SessionLocal() as db:
-                share = db.get(InstagramDirectShare, share_id)
-                thread_id = share.thread_id if share else ""
-                item_id = share.item_id if share else ""
-
-            if thread_id:
-                ack_text = _random.choice(ACK_MESSAGES)
-                reaction_emoji = _random.choice(REACTION_EMOJIS)
-                _ack_executor.submit(
-                    _ack_share_safely,
-                    share_id,
-                    thread_id,
-                    item_id,
-                    ack_text,
-                    reaction_emoji,
-                )
     return len(created_ids)
 
 
@@ -1139,44 +1331,46 @@ def notify_instagram_disconnect(detail: str) -> None:
 def poll_once() -> int:
     payload = fetch_linked_group_threads()
     bootstrapped = get_secret("instagram_direct_bootstrapped") == "1"
-    count = ingest_inbox(payload, notify=bootstrapped)
+    discovered = ingest_inbox(payload, notify=bootstrapped)
     if not bootstrapped:
         set_secret("instagram_direct_bootstrapped", "1")
-        logger.info("Instagram Direct baseline created with %s existing shared media items", count)
+        logger.info("Instagram Direct baseline created with %s existing shared media items", discovered)
+        set_secret("instagram_direct_runtime_status", "ready")
         return 0
-    return count
+
+    processed = _process_pending_group_shares(MAX_ITEMS_PER_CYCLE)
+    set_secret("instagram_direct_runtime_status", "ready")
+    set_secret("instagram_direct_last_success_at", datetime.utcnow().isoformat())
+    set_secret("instagram_direct_last_error", "")
+    return discovered + processed
 
 
 def run_watcher() -> None:
     init_db()
-    logger.info("Instagram linked-group watcher started")
+    logger.info("Instagram linked-group watcher started (10-20 minute adaptive polling)")
     sleep_seconds = _random.randint(POLL_MIN_SECONDS, POLL_MAX_SECONDS)
+
     while True:
+        pause_remaining = _pause_remaining_seconds()
+        if pause_remaining > 0:
+            # Local wait only: no Instagram request is made during the circuit-breaker pause.
+            time.sleep(min(60, pause_remaining))
+            continue
+
         try:
             count = poll_once()
             if count:
-                logger.info("Detected %s new shared media items in linked Instagram groups", count)
+                logger.info("Handled %s Instagram group discovery/processing events", count)
+            _clear_runtime_pause()
             sleep_seconds = _random.randint(POLL_MIN_SECONDS, POLL_MAX_SECONDS)
         except Exception as exc:
-            detail = str(exc)
-            detail_lower = detail.lower()
-            logger.warning("Instagram Direct poll failed: %s", detail)
-            if "session expired" in detail_lower or "login" in detail_lower:
+            detail = f"{type(exc).__name__}: {exc}"
+            logger.warning("Instagram Direct cycle failed: %s", detail)
+            kind = _instagram_error_kind(detail)
+            if kind in {"challenge", "auth"}:
                 notify_instagram_disconnect(detail)
+            sleep_seconds = _pause_for_instagram_error(detail)
 
-            if (
-                "challenge" in detail_lower
-                or "manual verification" in detail_lower
-                or "scraping_warning" in detail_lower
-            ):
-                # A checkpoint should not be hammered. Wait 15-30 minutes
-                # before trying the linked groups again.
-                sleep_seconds = _random.randint(900, 1800)
-            else:
-                sleep_seconds = min(
-                    300,
-                    max(POLL_MIN_SECONDS, int(sleep_seconds * 1.8) + _random.randint(0, 17)),
-                )
         time.sleep(sleep_seconds)
 
 
