@@ -332,7 +332,7 @@ def dispatch_due_mission_reports(now_utc: datetime | None = None) -> int:
         try:
             mission = build_channel_mission(channel_id, refresh=True, reference_date=local_now.date())
             report_text = mission_report_text(mission)
-            admin_sent = _send_telegram(report_text)
+            report_group_configured = bool((get_secret("telegram_reporting_group_id") or "").strip())
             center_sent = report_event(
                 category="analytics",
                 title="گزارش روزانه کانال",
@@ -340,6 +340,9 @@ def dispatch_due_mission_reports(now_utc: datetime | None = None) -> int:
                 channel_id=channel_id,
                 message=report_text,
             )
+            admin_sent = False
+            if not report_group_configured or not center_sent:
+                admin_sent = _send_telegram(report_text)
             if not admin_sent and not center_sent:
                 continue
             with SessionLocal() as db:
