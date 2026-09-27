@@ -301,12 +301,23 @@ def _active_linked_group_ids() -> list[str]:
         return result
 
 
-def fetch_linked_group_threads(limit: int = 20) -> dict:
-    """Fetch only explicitly linked Instagram group threads.
+def _known_thread_item_ids(thread_id: str, limit: int = 200) -> set[str]:
+    with SessionLocal() as db:
+        rows = (
+            db.query(InstagramDirectShare.item_id)
+            .filter(
+                InstagramDirectShare.thread_id == str(thread_id),
+                InstagramDirectShare.item_id != "",
+            )
+            .order_by(InstagramDirectShare.id.desc())
+            .limit(max(1, int(limit)))
+            .all()
+        )
+        return {str(row[0]) for row in rows if row and row[0]}
 
-    The background watcher uses this instead of the whole Direct inbox so
-    unrelated DMs and unlinked groups are never scanned for media.
-    """
+
+def fetch_linked_group_threads(limit: int = 20) -> dict:
+    """Fetch only linked groups, paging backward only when new traffic requires it."""
     thread_ids = _active_linked_group_ids()
     if not thread_ids:
         return {"inbox": {"threads": []}}
@@ -314,30 +325,75 @@ def fetch_linked_group_threads(limit: int = 20) -> dict:
     client = _instagram_private_client()
     threads: list[dict] = []
     errors: list[str] = []
-    params = {
-        "visual_message_return_type": "unseen",
-        "direction": "older",
-        "seq_id": "40065",
-        "limit": str(max(1, min(50, limit))),
-    }
+    page_limit = max(1, min(50, limit))
 
     for thread_id in thread_ids:
+        known_ids = _known_thread_item_ids(thread_id)
+        cursor = ""
+        combined_items: list[dict] = []
+        first_thread: dict | None = None
+
+        # One page is the normal case. Extra pages are only requested when
+        # an established group has more unseen traffic than fits on page one.
+        max_pages = 4 if known_ids else 1
         try:
-            result = client.private_request(
-                f"direct_v2/threads/{thread_id}/",
-                params=params,
-            )
-            thread = result.get("thread") if isinstance(result, dict) else None
-            if isinstance(thread, dict):
-                threads.append(thread)
-            else:
-                errors.append(f"{thread_id}: empty thread")
+            for page_number in range(max_pages):
+                params = {
+                    "visual_message_return_type": "unseen",
+                    "direction": "older",
+                    "seq_id": "40065",
+                    "limit": str(page_limit),
+                }
+                if cursor:
+                    params["cursor"] = cursor
+
+                result = client.private_request(
+                    f"direct_v2/threads/{thread_id}/",
+                    params=params,
+                )
+                thread = result.get("thread") if isinstance(result, dict) else None
+                if not isinstance(thread, dict):
+                    errors.append(f"{thread_id}: empty thread")
+                    break
+
+                if first_thread is None:
+                    first_thread = dict(thread)
+
+                page_items = [item for item in (thread.get("items") or []) if isinstance(item, dict)]
+                combined_items.extend(page_items)
+
+                page_ids = {
+                    str(item.get("item_id") or item.get("id") or "")
+                    for item in page_items
+                    if item.get("item_id") or item.get("id")
+                }
+                if known_ids and page_ids.intersection(known_ids):
+                    break
+
+                cursor = str(thread.get("oldest_cursor") or "")
+                if not cursor or page_number >= max_pages - 1:
+                    break
+
+                # Avoid burst pagination when a group had unusually high traffic.
+                time.sleep(_random.uniform(1.5, 3.5))
+
+            if first_thread is not None:
+                seen: set[str] = set()
+                unique_items: list[dict] = []
+                for item in combined_items:
+                    key = str(item.get("item_id") or item.get("id") or item.get("client_context") or "")
+                    if key and key in seen:
+                        continue
+                    if key:
+                        seen.add(key)
+                    unique_items.append(item)
+                first_thread["items"] = unique_items
+                threads.append(first_thread)
+
         except Exception as exc:
             detail = f"{type(exc).__name__}: {exc}"
             errors.append(f"{thread_id}: {detail}")
             logger.warning("Linked Instagram group %s could not be fetched: %s", thread_id, detail)
-            # Stop the cycle immediately on checkpoints/auth/rate limits so a
-            # single warning never cascades into requests for the other groups.
             if _instagram_error_kind(detail):
                 _reset_private_client()
                 raise RuntimeError(detail) from exc
