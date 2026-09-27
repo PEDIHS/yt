@@ -1127,8 +1127,6 @@ def _process_pending_group_shares(limit: int = MAX_ITEMS_PER_CYCLE) -> int:
 def _notify_auto_route_failure(share_id: int, error: str) -> None:
     token = resolve_telegram_token()
     admin_id = _primary_admin_id()
-    if not token or not admin_id:
-        return
     with SessionLocal() as db:
         share = db.get(InstagramDirectShare, share_id)
         if not share:
@@ -1136,14 +1134,20 @@ def _notify_auto_route_failure(share_id: int, error: str) -> None:
         channel = db.get(YouTubeChannel, share.selected_channel_id) if share.selected_channel_id else None
         channel_name = (channel.label or channel.title) if channel else "Unknown channel"
         title = share.title_hint or share.media_url
+        channel_id = share.selected_channel_id
+        upload_job_id = share.upload_job_id
+
     report_event(
         category="instagram",
         title="Auto Route اینستاگرام ناموفق بود",
         severity="error",
-        channel_id=share.selected_channel_id if share else None,
-        job_id=share.upload_job_id if share else None,
+        channel_id=channel_id,
+        job_id=upload_job_id,
         message=error[:1800],
     )
+
+    if not token or not admin_id:
+        return
     try:
         httpx.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
