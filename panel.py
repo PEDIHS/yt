@@ -559,6 +559,12 @@ def integrations_telegram():
         )
         flash(f"Telegram Bot @{info.get('username') or 'configured'} متصل شد و ادمین اصلی ثبت شد.", "success")
     except Exception as exc:
+        report_event(
+            category="connections",
+            title="تنظیم Telegram ناموفق بود",
+            severity="error",
+            message=str(exc),
+        )
         flash(f"تنظیم Telegram ذخیره نشد: {exc}", "danger")
     return redirect(url_for("integrations_page"))
 
@@ -624,6 +630,12 @@ def integrations_instagram():
         else:
             flash("کوکی‌های Instagram ذخیره شدند. تأیید نهایی هنگام اولین دانلود Reel/Post انجام می‌شود.", "success")
     except Exception as exc:
+        report_event(
+            category="connections",
+            title="اتصال Instagram ناموفق بود",
+            severity="error",
+            message=str(exc),
+        )
         flash(f"اتصال Instagram ناموفق بود: {exc}", "danger")
     return redirect(url_for("integrations_page"))
 
@@ -668,6 +680,12 @@ def integrations_instagram_groups_refresh():
             flash("فعلاً گروه Instagram در Inbox پیدا نشد. بعد از ساخت گروه دوباره Update List را بزن.", "warning")
     except Exception as exc:
         logger.exception("Instagram group refresh failed")
+        report_event(
+            category="instagram",
+            title="بروزرسانی لیست گروه‌های Instagram ناموفق بود",
+            severity="error",
+            message=str(exc),
+        )
         flash(f"بروزرسانی گروه‌های Instagram ناموفق بود: {exc}", "danger")
     return redirect(url_for("integrations_page") + "#instagram-group-routing")
 
@@ -699,6 +717,12 @@ def integrations_instagram_group_route(thread_id: str):
             flash(f"اتصال گروه «{route.thread_title}» غیرفعال شد.", "success")
     except Exception as exc:
         logger.exception("Instagram group routing update failed")
+        report_event(
+            category="instagram",
+            title="تنظیم Route گروه Instagram ناموفق بود",
+            severity="error",
+            message=str(exc),
+        )
         flash(f"ذخیره اتصال گروه ناموفق بود: {exc}", "danger")
     return redirect(url_for("integrations_page") + "#instagram-group-routing")
 
@@ -723,6 +747,12 @@ def integrations_google():
         )
         flash("Google Web OAuth Client ذخیره شد و Redirect URI معتبر است.", "success")
     except Exception as exc:
+        report_event(
+            category="connections",
+            title="ذخیره Google OAuth ناموفق بود",
+            severity="error",
+            message=str(exc),
+        )
         flash(f"Google OAuth ذخیره نشد: {exc}", "danger")
     return redirect(url_for("integrations_page"))
 
@@ -959,6 +989,12 @@ def oauth_callback():
         return redirect(url_for("channels"))
     except Exception as exc:
         logger.exception("OAuth callback failed")
+        report_event(
+            category="connections",
+            title="YouTube OAuth Callback ناموفق بود",
+            severity="error",
+            message=str(exc),
+        )
         return render_template("oauth_error.html", message=str(exc)), 400
 
 
@@ -1364,6 +1400,13 @@ def channel_analytics_sync(channel_id: int):
         _audit("panel", "channel_analytics_sync", f"channel_id={channel_id}; days={days}")
         flash(f"Analytics کانال برای {days} روز بروزرسانی شد.", "success")
     except Exception as exc:
+        report_event(
+            category="analytics",
+            title="همگام‌سازی Analytics ناموفق بود",
+            severity="error",
+            channel_id=channel_id,
+            message=str(exc),
+        )
         flash(f"همگام‌سازی Analytics ناموفق بود: {exc}", "danger")
     return redirect(url_for("channel_detail", channel_id=channel_id, days=days))
 
@@ -1377,6 +1420,13 @@ def channel_refresh(channel_id: int):
         refresh_channel(channel_id)
         flash("اطلاعات پایه کانال از YouTube بروزرسانی شد.", "success")
     except Exception as exc:
+        report_event(
+            category="connections",
+            title="بروزرسانی اطلاعات کانال ناموفق بود",
+            severity="error",
+            channel_id=channel_id,
+            message=str(exc),
+        )
         flash(f"خطا در همگام‌سازی: {exc}", "danger")
     return redirect(url_for("channel_detail", channel_id=channel_id, days=days))
 
