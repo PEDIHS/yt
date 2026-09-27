@@ -98,6 +98,10 @@ PLAYWRIGHT_BROWSERS_PATH = os.getenv(
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", PLAYWRIGHT_BROWSERS_PATH)
 
 POLL_SECONDS = 30
+POLL_MIN_SECONDS = 35
+POLL_MAX_SECONDS = 70
+ACK_INITIAL_DELAY_SECONDS = (3.0, 11.0)
+ACK_REPLY_DELAY_SECONDS = (1.5, 5.0)
 INBOX_URLS = (
     "https://www.instagram.com/api/v1/direct_v2/inbox/",
     "https://i.instagram.com/api/v1/direct_v2/inbox/",
@@ -792,6 +796,9 @@ def _ack_share_safely(
             except Exception:
                 pass
 
+    # Small bounded pacing avoids firing every automated action at the same instant.
+    time.sleep(_random.uniform(*ACK_INITIAL_DELAY_SECONDS))
+
     if item_id:
         try:
             _send_instagram_reaction(
@@ -810,6 +817,7 @@ def _ack_share_safely(
             logger.warning("Instagram reaction failed for share %s: %s", share_id, exc)
             _reset_private_client()
 
+    time.sleep(_random.uniform(*ACK_REPLY_DELAY_SECONDS))
     try:
         send_instagram_received_ack(thread_id, text)
         logger.info("Instagram acknowledgement sent for share %s", share_id)
@@ -1142,20 +1150,23 @@ def poll_once() -> int:
 def run_watcher() -> None:
     init_db()
     logger.info("Instagram linked-group watcher started")
-    backoff = POLL_SECONDS
+    sleep_seconds = _random.randint(POLL_MIN_SECONDS, POLL_MAX_SECONDS)
     while True:
         try:
             count = poll_once()
             if count:
                 logger.info("Detected %s new shared media items in linked Instagram groups", count)
-            backoff = POLL_SECONDS
+            sleep_seconds = _random.randint(POLL_MIN_SECONDS, POLL_MAX_SECONDS)
         except Exception as exc:
             detail = str(exc)
             logger.warning("Instagram Direct poll failed: %s", detail)
             if "session expired" in detail.lower() or "login" in detail.lower():
                 notify_instagram_disconnect(detail)
-            backoff = min(300, max(POLL_SECONDS, backoff * 2))
-        time.sleep(backoff)
+            sleep_seconds = min(
+                300,
+                max(POLL_MIN_SECONDS, int(sleep_seconds * 1.8) + _random.randint(0, 17)),
+            )
+        time.sleep(sleep_seconds)
 
 
 if __name__ == "__main__":
