@@ -15,6 +15,7 @@ from db import SessionLocal, init_db
 from jobs import enqueue_job, finalize_prepared_long_job, prepare_long_job_for_schedule, process_job
 from models import ChannelPublishingConfig, UploadJob, UploadJobOption, UploadSchedule, YouTubeChannel
 from missions import dispatch_due_mission_reports
+from reporting import report_event
 from youtube import list_channel_videos
 
 logger = logging.getLogger("publishing")
@@ -511,7 +512,28 @@ def schedule_job_smart(job_id: int) -> UploadSchedule:
         job.status = "scheduled"
         db.commit()
         db.refresh(schedule)
-        return schedule
+        scheduled_id = schedule.id
+        scheduled_for_value = schedule.scheduled_for
+        scheduled_reason = schedule.reason
+        scheduled_job_id = job.id
+        scheduled_channel_id = channel_id
+
+    try:
+        local_time = utc_to_channel_local(scheduled_channel_id, scheduled_for_value)
+        local_text = local_time.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        local_text = str(scheduled_for_value)
+    report_event(
+        category="queue",
+        title="ویدیو وارد صف هوشمند شد",
+        severity="success",
+        channel_id=scheduled_channel_id,
+        job_id=scheduled_job_id,
+        fields={"🕒 زمان انتشار": local_text},
+        message=scheduled_reason,
+    )
+    with SessionLocal() as db:
+        return db.get(UploadSchedule, scheduled_id)
 
 
 def local_datetime_to_utc(channel_id: int, value: str) -> datetime:
@@ -558,10 +580,30 @@ def schedule_job_manual(job_id: int, scheduled_for_utc: datetime) -> UploadSched
         job.status = "scheduled"
         db.commit()
         db.refresh(schedule)
-        return schedule
+        scheduled_id = schedule.id
+        scheduled_job_id = job.id
+        scheduled_channel_id = job.channel_id
+        scheduled_for_value = schedule.scheduled_for
+
+    try:
+        local_time = utc_to_channel_local(scheduled_channel_id, scheduled_for_value)
+        local_text = local_time.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        local_text = str(scheduled_for_value)
+    report_event(
+        category="queue",
+        title="زمان‌بندی دستی ثبت شد",
+        severity="success",
+        channel_id=scheduled_channel_id,
+        job_id=scheduled_job_id,
+        fields={"🕒 زمان انتشار": local_text},
+    )
+    with SessionLocal() as db:
+        return db.get(UploadSchedule, scheduled_id)
 
 
 def cancel_scheduled_job(job_id: int) -> None:
+    channel_id = None
     with SessionLocal() as db:
         schedule = db.query(UploadSchedule).filter_by(job_id=job_id).one_or_none()
         job = db.get(UploadJob, job_id)
@@ -569,23 +611,41 @@ def cancel_scheduled_job(job_id: int) -> None:
             raise RuntimeError("Scheduled job is not waiting")
         schedule.status = "cancelled"
         if job:
+            channel_id = job.channel_id
             job.status = "cancelled"
             job.finished_at = _utcnow()
         db.commit()
 
+    report_event(
+        category="queue",
+        title="آیتم صف لغو شد",
+        severity="warning",
+        channel_id=channel_id,
+        job_id=job_id,
+    )
+
 
 def release_job_now(job_id: int):
+    channel_id = None
     with SessionLocal() as db:
         schedule = db.query(UploadSchedule).filter_by(job_id=job_id).one_or_none()
         job = db.get(UploadJob, job_id)
         if not job:
             raise RuntimeError("Upload job not found")
+        channel_id = job.channel_id
         if schedule and schedule.status in {"waiting", "releasing"}:
             schedule.status = "released"
             schedule.released_at = _utcnow()
         job.status = "queued"
         job.error = None
         db.commit()
+    report_event(
+        category="publishing",
+        title="انتشار فوری از صف درخواست شد",
+        severity="warning",
+        channel_id=channel_id,
+        job_id=job_id,
+    )
     return enqueue_job(job_id)
 
 
@@ -640,6 +700,13 @@ def reschedule_channel_queue(channel_id: int) -> int:
     for job_id in job_ids:
         schedule_job_smart(job_id)
         count += 1
+    report_event(
+        category="queue",
+        title="صف کانال دوباره زمان‌بندی شد",
+        severity="info",
+        channel_id=channel_id,
+        fields={"🔄 تعداد": count},
+    )
     return count
 
 
@@ -737,8 +804,15 @@ def _analyze_peak_background(channel_id: int) -> None:
     try:
         analyze_peak_slots(channel_id, 90)
         logger.info("Peak analysis refreshed for channel %s", channel_id)
-    except Exception:
+    except Exception as exc:
         logger.exception("Peak analysis refresh failed for channel %s", channel_id)
+        report_event(
+            category="errors",
+            title="تحلیل Peak ناموفق بود",
+            severity="error",
+            channel_id=channel_id,
+            message=str(exc),
+        )
     finally:
         _peak_analysis_inflight.discard(channel_id)
 
@@ -787,8 +861,14 @@ def run_scheduler() -> None:
                 if scheduled:
                     logger.info("Queued %s automatic peak analyses", scheduled)
                 last_analysis_scan = now
-        except Exception:
+        except Exception as exc:
             logger.exception("Smart publishing scheduler loop failed")
+            report_event(
+                category="errors",
+                title="خطا در Smart Publishing Scheduler",
+                severity="critical",
+                message=str(exc),
+            )
         time.sleep(30)
 
 
