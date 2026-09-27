@@ -525,6 +525,12 @@ def integrations_instagram():
         set_secret("instagram_cookie_blob", cookie_blob)
         set_secret("instagram_username", info.get("username") or "")
         set_secret("instagram_user_id", info.get("user_id") or "")
+        # A freshly verified cookie set explicitly clears any previous
+        # challenge/rate-limit circuit breaker so the watcher can retry safely.
+        delete_secret("instagram_direct_pause_until")
+        delete_secret("instagram_direct_pause_reason")
+        delete_secret("instagram_direct_last_error")
+        set_secret("instagram_direct_runtime_status", "configured")
 
         _audit("panel", "instagram_connected", f"username={info.get('username') or ''}; verified={info.get('verified')}")
         if info.get("username"):
@@ -544,6 +550,12 @@ def integrations_instagram_disconnect():
     delete_secret("instagram_cookie_blob")
     delete_secret("instagram_username")
     delete_secret("instagram_user_id")
+    delete_secret("instagram_direct_pause_until")
+    delete_secret("instagram_direct_pause_reason")
+    delete_secret("instagram_direct_last_error")
+    delete_secret("instagram_direct_last_success_at")
+    delete_secret("instagram_direct_runtime_status")
+    delete_secret("instagram_private_api_settings")
     _audit("panel", "instagram_disconnected")
     flash("اتصال Instagram حذف شد.", "success")
     return redirect(url_for("integrations_page"))
