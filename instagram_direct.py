@@ -333,8 +333,14 @@ def fetch_linked_group_threads(limit: int = 20) -> dict:
             else:
                 errors.append(f"{thread_id}: empty thread")
         except Exception as exc:
-            errors.append(f"{thread_id}: {type(exc).__name__}: {exc}")
-            logger.warning("Linked Instagram group %s could not be fetched: %s", thread_id, exc)
+            detail = f"{type(exc).__name__}: {exc}"
+            errors.append(f"{thread_id}: {detail}")
+            logger.warning("Linked Instagram group %s could not be fetched: %s", thread_id, detail)
+            # Stop the cycle immediately on checkpoints/auth/rate limits so a
+            # single warning never cascades into requests for the other groups.
+            if _instagram_error_kind(detail):
+                _reset_private_client()
+                raise RuntimeError(detail) from exc
 
     if errors and not threads:
         _reset_private_client()
