@@ -62,6 +62,13 @@ from integrations import (
 )
 from models import AuditLog, OAuthRequest, UploadJob, UploadJobOption, UploadSchedule, YouTubeChannel
 from missions import build_channel_mission, set_mission_settings
+from reporting import (
+    configure_reporting_group,
+    disconnect_reporting_group,
+    report_event,
+    reporting_status,
+    sync_reporting_topics,
+)
 from security import credentials_match, csrf_token, login_required, require_csrf
 from youtube import (
     add_video_to_playlist,
@@ -442,6 +449,7 @@ def integrations_page():
             .all()
         )
     instagram_groups = list_instagram_group_routes() if instagram.get("configured") else []
+    reporting = reporting_status()
     return render_template(
         "integrations.html",
         google_status=google_status,
@@ -449,12 +457,75 @@ def integrations_page():
         instagram_direct=instagram_direct,
         instagram_groups=instagram_groups,
         instagram_route_channels=instagram_route_channels,
+        reporting=reporting,
         bot_configured=bot_configured,
         bot_username=bot_username,
         primary_admin_id=primary_admin_id,
         admin_count=admin_count,
         claim_code=claim_code,
     )
+
+
+@app.post("/integrations/reporting")
+@login_required
+def integrations_reporting():
+    require_csrf()
+    raw_group_id = request.form.get("group_id", "").strip()
+    try:
+        if not raw_group_id or not raw_group_id.lstrip("-").isdigit():
+            raise ValueError("آیدی عددی گروه گزارشات معتبر نیست.")
+        result = configure_reporting_group(int(raw_group_id))
+        _audit(
+            "panel",
+            "telegram_reporting_configured",
+            f"group_id={result['group_id']}; topics={result['topic_count']}; created={len(result['created'])}",
+        )
+        flash(
+            f"مرکز گزارشات «{result['title']}» آماده شد؛ "
+            f"{len(result['created'])} Topic جدید ساخته شد و مجموعاً {result['topic_count']} Topic فعال است.",
+            "success",
+        )
+        report_event(
+            category="connections",
+            title="Reporting Center متصل شد",
+            severity="success",
+            message=f"گروه گزارشات با {result['topic_count']} Topic آماده دریافت رویدادهای سیستم است.",
+        )
+    except Exception as exc:
+        logger.exception("Reporting group setup failed")
+        flash(f"تنظیم گروه گزارشات ناموفق بود: {exc}", "danger")
+    return redirect(url_for("integrations_page") + "#reporting-center")
+
+
+@app.post("/integrations/reporting/sync")
+@login_required
+def integrations_reporting_sync():
+    require_csrf()
+    try:
+        result = sync_reporting_topics()
+        _audit(
+            "panel",
+            "telegram_reporting_topics_synced",
+            f"group_id={result['group_id']}; created={len(result['created'])}; total={result['topic_count']}",
+        )
+        flash(
+            f"Topicها بروزرسانی شدند؛ {len(result['created'])} مورد جدید ساخته شد و مجموع {result['topic_count']} Topic فعال است.",
+            "success",
+        )
+    except Exception as exc:
+        logger.exception("Reporting topic sync failed")
+        flash(f"بروزرسانی Topicهای گزارشات ناموفق بود: {exc}", "danger")
+    return redirect(url_for("integrations_page") + "#reporting-center")
+
+
+@app.post("/integrations/reporting/disconnect")
+@login_required
+def integrations_reporting_disconnect():
+    require_csrf()
+    disconnect_reporting_group()
+    _audit("panel", "telegram_reporting_disconnected")
+    flash("اتصال گروه گزارشات از پنل حذف شد. Topicهای ساخته‌شده در خود Telegram دست‌نخورده باقی ماندند.", "success")
+    return redirect(url_for("integrations_page") + "#reporting-center")
 
 
 @app.post("/integrations/telegram")
@@ -480,6 +551,12 @@ def integrations_telegram():
         add_telegram_admin(admin_id)
         set_secret("telegram_primary_admin_id", str(admin_id))
         _audit("panel", "telegram_bot_configured", f"bot_id={info.get('id')}; primary_admin_id={admin_id}")
+        report_event(
+            category="connections",
+            title="Telegram Bot بروزرسانی شد",
+            severity="success",
+            message=f"Bot @{info.get('username') or 'configured'} و ادمین اصلی با موفقیت اعتبارسنجی شدند.",
+        )
         flash(f"Telegram Bot @{info.get('username') or 'configured'} متصل شد و ادمین اصلی ثبت شد.", "success")
     except Exception as exc:
         flash(f"تنظیم Telegram ذخیره نشد: {exc}", "danger")
@@ -533,6 +610,15 @@ def integrations_instagram():
         set_secret("instagram_direct_runtime_status", "configured")
 
         _audit("panel", "instagram_connected", f"username={info.get('username') or ''}; verified={info.get('verified')}")
+        report_event(
+            category="connections",
+            title="Instagram متصل شد",
+            severity="success",
+            message=(
+                f"اکانت @{info.get('username')}" if info.get("username")
+                else "Cookie/Session جدید Instagram ذخیره و اعتبارسنجی شد."
+            ),
+        )
         if info.get("username"):
             flash(f"Instagram @{info.get('username')} با موفقیت متصل شد.", "success")
         else:
@@ -557,6 +643,12 @@ def integrations_instagram_disconnect():
     delete_secret("instagram_direct_runtime_status")
     delete_secret("instagram_private_api_settings")
     _audit("panel", "instagram_disconnected")
+    report_event(
+        category="connections",
+        title="Instagram قطع شد",
+        severity="warning",
+        message="اتصال Instagram از پنل حذف شد و Watcher تا اتصال مجدد ورودی جدیدی دریافت نمی‌کند.",
+    )
     flash("اتصال Instagram حذف شد.", "success")
     return redirect(url_for("integrations_page"))
 
@@ -623,6 +715,12 @@ def integrations_google():
     try:
         save_google_web_client(raw)
         _audit("panel", "google_oauth_client_updated")
+        report_event(
+            category="connections",
+            title="Google OAuth Client بروزرسانی شد",
+            severity="success",
+            message="Google Web OAuth Client جدید ذخیره و Redirect URI اعتبارسنجی شد.",
+        )
         flash("Google Web OAuth Client ذخیره شد و Redirect URI معتبر است.", "success")
     except Exception as exc:
         flash(f"Google OAuth ذخیره نشد: {exc}", "danger")
@@ -841,6 +939,17 @@ def oauth_callback():
             + ",".join(str(channel.id) for channel in connected_channels)
             + f"; analytics_synced={analytics_synced}; analytics_failed={analytics_failed}; resumed_jobs={resumed_jobs}",
         )
+        for connected_channel in connected_channels:
+            report_event(
+                category="connections",
+                title="کانال YouTube متصل/بروزرسانی شد",
+                severity="success",
+                channel_id=connected_channel.id,
+                message=(
+                    f"YouTube OAuth برای «{connected_channel.title}» آماده است. "
+                    f"Analytics اولیه: {'موفق' if analytics_failed == 0 else 'بررسی انجام شد'}."
+                ),
+            )
         if resumed_jobs:
             flash(
                 "Jobهای متوقف‌شده به‌خاطر OAuth به‌صورت خودکار ادامه داده شدند: "
