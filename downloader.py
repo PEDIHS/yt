@@ -518,6 +518,84 @@ def _download_from_page_candidates(url: str, job_dir: Path, quality: str) -> tup
     )
 
 
+def _resolve_ffmpeg_binary() -> Optional[str]:
+    configured = (Config.FFMPEG_PATH or "").strip()
+    if configured:
+        configured_path = Path(configured)
+        candidate = configured_path if configured_path.is_file() else configured_path / "ffmpeg"
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which("ffmpeg")
+
+
+def normalize_video_for_upload(file_path: str) -> tuple[str, dict[str, Any]]:
+    """Normalize a processed media file before handing it to the upload API.
+
+    The media streams are copied without re-encoding. Source/container metadata
+    is removed and the local filename is replaced with a neutral generated name.
+    """
+    source = Path(file_path).resolve()
+    if not source.is_file():
+        raise FileNotFoundError(file_path)
+
+    suffix = source.suffix.lower() if source.suffix.lower() in _VIDEO_SUFFIXES else ".mp4"
+    target = source.with_name(f"upload_{uuid.uuid4().hex[:16]}{suffix}")
+    ffmpeg = _resolve_ffmpeg_binary()
+    result_info: dict[str, Any] = {
+        "original_filename_removed": source.name != target.name,
+        "container_metadata_removed": False,
+        "streams_reencoded": False,
+        "method": "rename-only",
+    }
+
+    if not ffmpeg:
+        os.replace(source, target)
+        return str(target), result_info
+
+    command = [
+        ffmpeg,
+        "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(source),
+        "-map", "0:v?", "-map", "0:a?",
+        "-map_metadata", "-1",
+        "-map_chapters", "-1",
+        "-metadata", "title=",
+        "-metadata", "comment=",
+        "-metadata", "description=",
+        "-metadata", "creation_time=",
+        "-metadata", "encoder=",
+        "-metadata:s:v", "handler_name=",
+        "-metadata:s:a", "handler_name=",
+        "-c", "copy",
+    ]
+    if suffix in {".mp4", ".m4v", ".mov"}:
+        command.extend(["-movflags", "+faststart"])
+    command.append(str(target))
+
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=900,
+            check=False,
+        )
+        if completed.returncode != 0 or not target.exists() or not _has_video_stream(target):
+            detail = (completed.stderr or "ffmpeg remux failed").strip()[-500:]
+            raise RuntimeError(detail)
+        source.unlink(missing_ok=True)
+        result_info["container_metadata_removed"] = True
+        result_info["method"] = "ffmpeg-remux"
+        return str(target), result_info
+    except Exception as exc:
+        logger.warning("Media normalization fell back to rename-only for %s: %s", source.name, exc)
+        target.unlink(missing_ok=True)
+        fallback = source.with_name(f"upload_{uuid.uuid4().hex[:16]}{suffix}")
+        os.replace(source, fallback)
+        result_info["fallback_reason"] = str(exc)[:300]
+        return str(fallback), result_info
+
+
 def download_external_video(url: str, *, quality: str = "max") -> tuple[str, dict[str, Any]]:
     if not is_supported_external_url(url):
         raise ValueError("Only public http/https media URLs are allowed")
@@ -550,11 +628,15 @@ def download_external_video(url: str, *, quality: str = "max") -> tuple[str, dic
                         f"extraction, or expose no public media stream. Detail: {detail[:300]}"
                     ) from page_exc
 
+        normalized_path, normalization = normalize_video_for_upload(str(video_path))
+        video_path = Path(normalized_path)
+        metadata["upload_normalization"] = normalization
         logger.info(
-            "Long-form media ready via %s: %s (%s bytes)",
+            "Long-form media ready via %s: %s (%s bytes; normalized=%s)",
             metadata.get("strategy") or "unknown",
             video_path.name,
             video_path.stat().st_size,
+            normalization.get("method"),
         )
         return str(video_path), metadata
     except Exception:
@@ -670,10 +752,13 @@ def download_video(url: str) -> Optional[str]:
                 return None
 
         video_path = _select_downloaded_video(job_dir)
+        normalized_path, normalization = normalize_video_for_upload(str(video_path))
+        video_path = Path(normalized_path)
         logger.info(
-            "Instagram video ready: %s (%s bytes)",
+            "Instagram video ready: %s (%s bytes; normalized=%s)",
             video_path.name,
             video_path.stat().st_size,
+            normalization.get("method"),
         )
         return str(video_path)
     except Exception:
